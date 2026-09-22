@@ -95,9 +95,25 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
 + (UIImage *)iconForBundleIdentifier:(NSString *)bid {
     if (!bid.length) return nil;
-    // Private UIKit API available since iOS 15.
-    if ([UIImage respondsToSelector:@selector(_applicationIconImageForBundleIdentifier:format:scale:)]) {
-        return [UIImage _applicationIconImageForBundleIdentifier:bid format:0 scale:[UIScreen mainScreen].scale];
+    // Use LSApplicationProxy's iconDataForVariant: -> UIImage to avoid linker issues.
+    Class LSApplicationProxy = NSClassFromString(@"LSApplicationProxy");
+    if (!LSApplicationProxy) return nil;
+    id proxy = [LSApplicationProxy applicationProxyForIdentifier:bid];
+    if (!proxy) return nil;
+    NSData *data = nil;
+    if ([proxy respondsToSelector:@selector(iconDataForVariant:)]) {
+        data = [proxy iconDataForVariant:2]; // 2 = default icon variant
+    }
+    if (!data && [proxy respondsToSelector:@selector(iconDataForVariant:withOptions:)]) {
+        data = [proxy iconDataForVariant:2 withOptions:0];
+    }
+    if (data) {
+        UIImage *img = [UIImage imageWithData:data];
+        if (img) return img;
+    }
+    // Fallback: try iconImageForDescription: if available.
+    if ([proxy respondsToSelector:@selector(iconImageForDescription:)]) {
+        return [proxy iconImageForDescription:nil];
     }
     return nil;
 }
