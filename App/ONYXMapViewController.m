@@ -4,6 +4,7 @@
 #import "ONYXMapView.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
+#import <Security/Security.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
@@ -45,6 +46,32 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self setupSheet];
     [self loadState];
     [self updateLabels];
+
+    // 诊断：启动时读取自身 entitlements，确认 network.client 是否真正签入（防 CI 漏签）
+    NSString *netStatus = [self networkEntitlementStatus];
+    NSLog(@"[Onyx] 网络授权状态: %@", netStatus);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.mapStatLabel.text = [@"授权：" stringByAppendingString:netStatus];
+    });
+}
+
+// 读取 App 自身签名 entitlements，确认 network.client 是否生效
+- (NSString *)networkEntitlementStatus {
+    NSString *status = @"未知(读取失败)";
+    SecCodeRef code = NULL;
+    if (SecCodeCopySelf(kSecCSDefaultFlags, &code) == errSecSuccess) {
+        CFDictionaryRef sig = NULL;
+        if (SecCodeCopySigningInformation(code, kSecCSSigningInformation, &sig) == errSecSuccess) {
+            CFDictionaryRef ent = CFDictionaryGetValue(sig, kSecCodeInfoEntitlementsDict);
+            NSDictionary *e = (__bridge NSDictionary *)ent;
+            NSLog(@"[Onyx] 完整 entitlements = %@", e);
+            NSNumber *net = e[@"com.apple.security.network.client"];
+            status = ([net boolValue] ? @"✓已签入" : @"✗未签入");
+            CFRelease(sig);
+        }
+        CFRelease(code);
+    }
+    return status;
 }
 
 - (void)setupNav {
@@ -271,9 +298,10 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 - (void)onyxMapViewDidFailWithError:(NSString *)error {
+    NSString *netStatus = [self networkEntitlementStatus];
     dispatch_async(dispatch_get_main_queue(), ^{
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"地图瓦片加载失败"
-            message:[NSString stringWithFormat:@"%@\n\n多为：App 直接联网被沙箱限制（缺 network.client 授权）或设备无外网。高德与 OSM 两条源均已尝试失败。", error ?: @""]
+            message:[NSString stringWithFormat:@"错误：%@\n网络授权：%@\n\n若授权为「✗未签入」= App 沙箱限制联网（CI 漏签 entitlements）；若「✓已签入」仍失败=设备网络环境限制（代理/DNS/防火墙）。高德与 OSM 两条源均已尝试失败。", error ?: @"", netStatus]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
