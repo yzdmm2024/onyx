@@ -4,8 +4,11 @@
 @protocol ONYXMapViewDelegate <NSObject>
 // 回传的是底图坐标系(GCJ-02)选中的经纬度
 - (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord;
-// 诊断：瓦片取图成功/失败计数
+// 诊断：瓦片取图成功/失败计数 + 末次失败原因
 - (void)onyxMapViewDidUpdateStats:(NSString *)stats;
+@optional
+// 首次失败详情（用于弹 alert，一眼定位根因）
+- (void)onyxMapViewDidFailWithError:(NSString *)error;
 @end
 
 @interface ONYXMapView : UIView

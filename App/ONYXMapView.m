@@ -3,8 +3,8 @@
 static const NSInteger TILE = 256;
 
 // 原生地图：App 主进程 NSURLSession 取瓦片，直接平铺到 UIImageView。
-// 彻底绕开 WKWebView / WebContent 子进程（自签越狱 App 的 WebContent 网络被限，
-// 表现即为"神秘蓝屏、无任何信息"）。诊断计数直接回传原生，不再依赖网页 JS。
+// 绕开 WKWebView / WebContent 子进程（自签越狱 App 的 WebContent 网络被限）。
+// 取图失败会经 delegate 弹出具体 error，便于定位是「沙箱无网络权限」还是「设备无外网」。
 
 @interface ONYXMapView ()
 @property (nonatomic, strong) UIView *tilesContainer;
@@ -20,9 +20,24 @@ static const NSInteger TILE = 256;
 @property (nonatomic, assign) NSInteger ok;
 @property (nonatomic, assign) NSInteger fail;
 @property (nonatomic, assign) CGPoint panStartWorld;
+@property (nonatomic, copy) NSString *lastErr;
 @end
 
 @implementation ONYXMapView
+
++ (NSURLSession *)sharedSession {
+    static NSURLSession *s = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
+        c.allowsCellularAccess = YES;
+        c.waitsForConnectivity = NO;
+        c.timeoutIntervalForRequest = 15;
+        c.timeoutIntervalForResource = 30;
+        s = [NSURLSession sessionWithConfiguration:c];
+    });
+    return s;
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
@@ -72,7 +87,7 @@ static const NSInteger TILE = 256;
     return v;
 }
 
-#pragma mark - 坐标数学（Web Mercator，与旧网页底图一致）
+#pragma mark - 坐标数学（Web Mercator）
 
 - (CGPoint)worldForLng:(double)lng lat:(double)lat zoom:(NSInteger)z {
     double n = pow(2, z);
@@ -175,7 +190,7 @@ static const NSInteger TILE = 256;
         forHTTPHeaderField:@"User-Agent"];
     if (gaode) [req setValue:@"https://www.amap.com/" forHTTPHeaderField:@"Referer"];
 
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+    [[[self class] sharedSession] dataTaskWithRequest:req
         completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         NSHTTPURLResponse *hr = (NSHTTPURLResponse *)resp;
         if (!err && hr.statusCode == 200 && data.length) {
@@ -191,15 +206,29 @@ static const NSInteger TILE = 256;
             }
         }
         if (gaode) { [self fetchTile:key x:x y:y z:z gaode:NO]; return; }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self incrFail]; });
-    }];
-    [task resume];
+        // 高德 + OSM 均失败：记录具体错误
+        NSString *desc;
+        if (err) {
+            desc = [NSString stringWithFormat:@"%@ (code %ld)", err.localizedDescription, (long)err.code];
+        } else {
+            desc = [NSString stringWithFormat:@"HTTP %ld 空响应", (long)hr.statusCode];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_lastErr = desc;
+            [self incrFail];
+            if (self->_ok == 0 &&
+                [self->_delegate respondsToSelector:@selector(onyxMapViewDidFailWithError:)]) {
+                [self->_delegate onyxMapViewDidFailWithError:desc];
+            }
+        });
+    }] resume];
 }
 
 - (void)incrOk { _ok++; [self reportStats]; }
 - (void)incrFail { _fail++; [self reportStats]; }
 - (void)reportStats {
-    NSString *s = [NSString stringWithFormat:@"瓦片 成功 %ld / 失败 %ld", (long)_ok, (long)_fail];
+    NSString *s = [NSString stringWithFormat:@"成功 %ld / 失败 %ld", (long)_ok, (long)_fail];
+    if (_fail > 0 && _lastErr) s = [s stringByAppendingFormat:@" · %@", _lastErr];
     if ([_delegate respondsToSelector:@selector(onyxMapViewDidUpdateStats:)]) {
         [_delegate onyxMapViewDidUpdateStats:s];
     }

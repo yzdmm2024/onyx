@@ -1,6 +1,6 @@
 Package: com.yzdmm.onyx
 Name: Onyx
-Version: 0.2.6
+Version: 0.2.7
 Architecture: iphoneos-arm64
 Depends: firmware (>= 16.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm

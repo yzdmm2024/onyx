@@ -270,6 +270,16 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     });
 }
 
+- (void)onyxMapViewDidFailWithError:(NSString *)error {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"地图瓦片加载失败"
+            message:[NSString stringWithFormat:@"%@\n\n多为：App 直接联网被沙箱限制（缺 network.client 授权）或设备无外网。高德与 OSM 两条源均已尝试失败。", error ?: @""]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:a animated:YES completion:nil];
+    });
+}
+
 // 把内部 WGS-84 坐标推到原生地图（底图是高德 GCJ-02）
 - (void)pushCurrentToMap:(NSInteger)zoom {
     CLLocationCoordinate2D gcj = [ONYXCoordTransform convert:self.currentCoord fromSystem:OnyxCoordSystemWGS84 toSystem:OnyxCoordSystemGCJ02];

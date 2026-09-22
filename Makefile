@@ -24,6 +24,7 @@ OnyxApp_FILES = App/main.m App/ONYXAppDelegate.m App/ONYXMapViewController.m App
 OnyxApp_FRAMEWORKS = UIKit Foundation MapKit CoreLocation CoreGraphics
 OnyxApp_CFLAGS = -fobjc-arc -fobjc-exceptions -Wno-deprecated-declarations -w
 OnyxApp_LDFLAGS = -Wl,-undefined,dynamic_lookup
+OnyxApp_CODESIGN_ENTITLEMENTS = App/OnyxApp.entitlements
 OnyxApp_RESOURCE_DIRS = App/Resources
 
 include $(THEOS_MAKE_PATH)/tweak.mk
