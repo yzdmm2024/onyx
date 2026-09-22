@@ -32,29 +32,25 @@ jobs:
 
       - name: Inject network/mapkit entitlements into OnyxApp
         # theos 的 <app>_ENTITLEMENTS 在 CI 环境不生效，这里用 ldid 显式把 entitlements 签进 App 二进制。
-        # 解包 deb -> ldid 签名 -> 重包 deb（gzip 格式，dpkg 通用）。
+        # 用 dpkg-deb 解包/重包（标准 deb 工具，正确处理 GNU 长名格式）。
         run: |
           set -e
+          brew install dpkg 2>/dev/null || true
           cd "$GITHUB_WORKSPACE"
           DEB=$(ls packages/*.deb)
           echo "source deb: $DEB"
           WORK=/tmp/onyx_ent
-          rm -rf "$WORK" && mkdir -p "$WORK/payload"
-          cd "$WORK"
-          ar x "$GITHUB_WORKSPACE/$DEB"
-          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar -xf - -C payload; fi
-          if [ -f data.tar.gz ]; then tar -zxf data.tar.gz -C payload; fi
-          if [ -f data.tar.xz ]; then xz -dc data.tar.xz | tar -xf - -C payload; fi
-          APP=$(find payload -name OnyxApp -type f | head -1)
+          rm -rf "$WORK" && mkdir -p "$WORK/root"
+          dpkg-deb -x "$DEB" "$WORK/root"
+          dpkg-deb -e "$DEB" "$WORK/root/DEBIAN"
+          APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
           echo "signing: $APP"
           ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
           echo "--- 签名后的 entitlements ---"
           ldid -e "$APP" | grep -E "network.client|mapkit|get-task-allow|personal-information.location" || true
-          tar -zcf data.tar.gz -C payload .
-          rm -f data.tar.lzma data.tar.xz
           BASE=$(basename "$DEB")
           rm -f "$GITHUB_WORKSPACE/packages/$BASE"
-          ar rcs "$GITHUB_WORKSPACE/packages/$BASE" debian-binary control.tar.gz data.tar.gz
+          dpkg-deb -b "$WORK/root" "$GITHUB_WORKSPACE/packages/$BASE"
           echo "rebuilt deb: $BASE"
 
       - name: Verify entitlements in repacked deb
@@ -62,12 +58,9 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           DEB=$(ls packages/*.deb)
           WORK=/tmp/onyx_verify
-          rm -rf "$WORK" && mkdir -p "$WORK"
-          cd "$WORK"
-          ar x "$DEB"
-          if [ -f data.tar.gz ]; then tar -zxf data.tar.gz; fi
-          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar -xf -; fi
-          APP=$(find . -name OnyxApp -type f | head -1)
+          rm -rf "$WORK" && mkdir -p "$WORK/root"
+          dpkg-deb -x "$DEB" "$WORK/root"
+          APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
           echo "verifying: $APP"
           ldid -e "$APP" | grep -E "network.client|mapkit" && echo "ENTITLEMENTS_OK" || echo "ENTITLEMENTS_MISSING"
 
