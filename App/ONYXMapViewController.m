@@ -324,8 +324,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)saveTapped:(UIButton *)sender {
+    self.running = YES; // 「保存并应用」即启用，避免用户只点保存却没点开始导致 enabled=NO 不生效
     [self saveState];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存" message:@"坐标已保存并通知 Tweak 生效。" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:@"坐标已保存，定位修改已开启。请到「应用列表」勾选目标 App，然后重启该 App 生效。" preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
