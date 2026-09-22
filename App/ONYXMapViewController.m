@@ -2,6 +2,7 @@
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
 #import "ONYXMapView.h"
+#import "ONYXAMapView.h"
 #import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
 #import <math.h>
@@ -9,8 +10,9 @@
 static NSString *const kDomain = @"com.yzdmm.onyx";
 static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
-@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
-@property (nonatomic, strong) ONYXMapView *mapView;
+@interface ONYXMapViewController () <ONYXMapViewDelegate, ONYXAMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
+@property (nonatomic, strong) ONYXAMapView *amapView;
+@property (nonatomic, strong) ONYXMapView *statusCard;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
 @property (nonatomic, strong) UIView *sheetContent;
@@ -67,13 +69,19 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    // 静态提示面板（jailbreak 自签 App 无法加载系统地图瓦片）
-    self.mapView = [[ONYXMapView alloc] initWithFrame:CGRectZero];
-    self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.mapView.delegate = self;
-    [self.view addSubview:self.mapView];
+    // 高德 JS 地图（WebView），用户提供了 key
+    self.amapView = [[ONYXAMapView alloc] initWithFrame:CGRectZero];
+    self.amapView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.amapView.delegate = self;
+    [self.view addSubview:self.amapView];
 
-    // 诊断标签
+    // 状态卡片（保持原有"定位模拟状态"面板，放到地图下方）
+    self.statusCard = [[ONYXMapView alloc] initWithFrame:CGRectZero];
+    self.statusCard.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusCard.delegate = self;
+    [self.view addSubview:self.statusCard];
+
+    // 地图状态标签
     self.mapStatLabel = [[UILabel alloc] init];
     self.mapStatLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapStatLabel.font = [UIFont systemFontOfSize:12];
@@ -81,7 +89,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.mapStatLabel.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
     self.mapStatLabel.layer.cornerRadius = 7;
     self.mapStatLabel.clipsToBounds = YES;
-    self.mapStatLabel.text = @"地图：当前环境不可用";
+    self.mapStatLabel.text = @"地图：加载中";
     self.mapStatLabel.textAlignment = NSTextAlignmentCenter;
     [self.view addSubview:self.mapStatLabel];
 
@@ -91,21 +99,26 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         [self.searchBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.searchBar.heightAnchor constraintEqualToConstant:44],
 
-        [self.mapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
-        [self.mapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.mapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.mapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
-        [self.mapView.heightAnchor constraintGreaterThanOrEqualToConstant:240],
+        [self.amapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
+        [self.amapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.amapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.amapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.38],
+        [self.amapView.heightAnchor constraintGreaterThanOrEqualToConstant:180],
 
-        [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.mapView.leadingAnchor constant:10],
-        [self.mapStatLabel.bottomAnchor constraintEqualToAnchor:self.mapView.bottomAnchor constant:-10],
-        [self.mapStatLabel.widthAnchor constraintEqualToConstant:170],
-        [self.mapStatLabel.heightAnchor constraintEqualToConstant:24]
+        [self.statusCard.topAnchor constraintEqualToAnchor:self.amapView.bottomAnchor],
+        [self.statusCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.statusCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.statusCard.heightAnchor constraintEqualToConstant:190],
+
+        [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.amapView.leadingAnchor constant:10],
+        [self.mapStatLabel.topAnchor constraintEqualToAnchor:self.amapView.topAnchor constant:10],
+        [self.mapStatLabel.widthAnchor constraintEqualToConstant:100],
+        [self.mapStatLabel.heightAnchor constraintEqualToConstant:22]
     ]];
 }
 
-- (void)zoomIn:(id)sender { [self.mapView zoomIn]; }
-- (void)zoomOut:(id)sender { [self.mapView zoomOut]; }
+- (void)zoomIn:(id)sender { [self.amapView zoomIn]; }
+- (void)zoomOut:(id)sender { [self.amapView zoomOut]; }
 
 - (void)setupSheet {
     self.sheet = [[UIScrollView alloc] init];
@@ -118,7 +131,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self.sheet addSubview:self.sheetContent];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.sheet.topAnchor constraintEqualToAnchor:self.mapView.bottomAnchor],
+        [self.sheet.topAnchor constraintEqualToAnchor:self.statusCard.bottomAnchor],
         [self.sheet.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sheet.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -244,34 +257,35 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     return b;
 }
 
-#pragma mark - ONYXMapViewDelegate
+#pragma mark - ONYXAMapViewDelegate
 
-- (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord {
-    // 提示面板/搜索/手动输入回传的均为 WGS-84，直接存内部
+- (void)amapView:(ONYXAMapView *)mapView didPickCoordinate:(CLLocationCoordinate2D)coord {
+    // AMap 回调是 GCJ-02，已转 WGS-84
     self.currentCoord = coord;
     [self updateLabels];
     [self reverseGeocode:coord];
 }
 
-- (void)onyxMapViewDidUpdateStats:(NSString *)stats {
+- (void)amapView:(ONYXAMapView *)mapView didUpdateStatus:(NSString *)status {
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.mapStatLabel.text = [@"地图：" stringByAppendingString:stats ?: @""];
+        self.mapStatLabel.text = [@"地图：" stringByAppendingString:status ?: @"就绪"];
     });
 }
 
-- (void)onyxMapViewDidFailWithError:(NSString *)error {
+- (void)amapView:(ONYXAMapView *)mapView didFailWithError:(NSString *)error {
     dispatch_async(dispatch_get_main_queue(), ^{
+        self.mapStatLabel.text = @"地图：失败";
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"地图加载失败"
-            message:[NSString stringWithFormat:@"%@\n\n若一直失败，多为系统地图通道不可用（mapkit 授权未生效）。可改用顶部「搜索」或底部手动输入 纬度,经度 定位。", error ?: @""]
+            message:[NSString stringWithFormat:@"%@\n\n可继续用顶部「搜索」或底部手动输入 纬度,经度 定位。", error ?: @""]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
     });
 }
 
-// 更新提示面板上显示的当前坐标
+// 更新地图中心、状态卡片、标记
 - (void)pushCurrentToMap:(NSInteger)zoom {
-    [self.mapView setCenterCoordinate:self.currentCoord zoom:zoom showMarker:YES];
+    [self.amapView setCenterCoordinate:self.currentCoord zoom:zoom showMarker:YES];
 }
 
 #pragma mark - State
@@ -328,15 +342,16 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     fmt.dateFormat = @"HH:mm:ss";
     NSString *time = [fmt stringFromDate:[NSDate date]];
-    [self.mapView setStatusRunning:self.running selectedCount:count lastUpdated:time];
+    [self.statusCard setStatusRunning:self.running selectedCount:count lastUpdated:time];
     self.mapStatLabel.text = self.running
         ? [NSString stringWithFormat:@"已启用 · %ld App", (long)count]
-        : @"已停止";
+        : @"未启用";
 }
 
 - (void)placePinAt:(CLLocationCoordinate2D)coord {
     self.currentCoord = coord;
     [self pushCurrentToMap:14];
+    [self.amapView setMarkerCoordinate:coord];
 }
 
 #pragma mark - Actions

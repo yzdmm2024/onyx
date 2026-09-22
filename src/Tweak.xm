@@ -66,7 +66,9 @@ static BOOL _active(void) {
     if (!s_enabled || !s_hasCoord) return NO;
     NSString *bid = NSBundle.mainBundle.bundleIdentifier;
     if (!bid.length) return NO;
-    if (s_selectedApps && ![s_selectedApps containsObject:bid]) return NO;
+    // 必须有明确选择；空列表 = 不注入任何 App（系统级模拟由 App 的 CLSimulationManager 负责）
+    if (!s_selectedApps || s_selectedApps.count == 0) return NO;
+    if (![s_selectedApps containsObject:bid]) return NO;
     return YES;
 }
 

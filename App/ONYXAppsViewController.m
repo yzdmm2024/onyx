@@ -19,8 +19,9 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         _iconView = [[UIImageView alloc] init];
         _iconView.translatesAutoresizingMaskIntoConstraints = NO;
         _iconView.contentMode = UIViewContentModeScaleAspectFit;
-        _iconView.layer.cornerRadius = 8;
+        _iconView.layer.cornerRadius = 9;
         _iconView.layer.masksToBounds = YES;
+        _iconView.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1.0];
         [self.contentView addSubview:_iconView];
 
         _nameLabel = [[UILabel alloc] init];
@@ -62,9 +63,14 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
 @end
 
-@interface ONYXAppsViewController ()
+#pragma mark - Search helper
+
+@interface ONYXAppsViewController () <UISearchResultsUpdating>
 @property (nonatomic, strong) NSArray<NSDictionary *> *apps;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filteredApps;
 @property (nonatomic, strong) NSMutableSet<NSString *> *selected;
+@property (nonatomic, strong) UISearchController *searchController;
+@property (nonatomic, assign) BOOL isSearching;
 @end
 
 @implementation ONYXAppsViewController
@@ -83,8 +89,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
             if (!bid.length) continue;
             [out addObject:@{
                 @"bid": bid,
-                @"name": name ?: bid,
-                @"system": @([[bid pathExtension] isEqualToString:@""]) // rough heuristic, not used
+                @"name": name ?: bid
             }];
         }
         [out sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES selector:@selector(localizedStandardCompare:)]]];
@@ -95,24 +100,30 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
 + (UIImage *)iconForBundleIdentifier:(NSString *)bid {
     if (!bid.length) return nil;
-    // Use LSApplicationProxy via runtime to avoid header/linker dependencies.
     Class LSApplicationProxy = NSClassFromString(@"LSApplicationProxy");
     if (!LSApplicationProxy) return nil;
     id proxy = [LSApplicationProxy performSelector:NSSelectorFromString(@"applicationProxyForIdentifier:") withObject:bid];
     if (!proxy) return nil;
 
+    // 多尝试几个 variant/options，不同 iOS 版本/系统应用/用户应用接口不同
     NSData *data = nil;
-    if ([proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
-        data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:") withObject:@(2)];
-    }
-    if (!data && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:")]) {
-        data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:") withObject:@(2) withObject:@(0)];
+    struct { int variant; int options; } combos[] = {
+        {2, 0}, {0, 0}, {8, 0}, {2, 1}, {0, 1}, {8, 1},
+    };
+    for (NSUInteger i = 0; i < sizeof(combos)/sizeof(combos[0]); i++) {
+        if ([proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:")]) {
+            data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:")
+                               withObject:@(combos[i].variant) withObject:@(combos[i].options)];
+        } else if ([proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
+            data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:")
+                               withObject:@(combos[i].variant)];
+        }
+        if ([data isKindOfClass:[NSData class]] && data.length) break;
     }
     if (data && [data isKindOfClass:[NSData class]]) {
         UIImage *img = [UIImage imageWithData:data];
         if (img) return img;
     }
-    // Fallback: iconImageForDescription:
     if ([proxy respondsToSelector:NSSelectorFromString(@"iconImageForDescription:")]) {
         id img = [proxy performSelector:NSSelectorFromString(@"iconImageForDescription:") withObject:nil];
         if ([img isKindOfClass:[UIImage class]]) return img;
@@ -120,38 +131,96 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     return nil;
 }
 
++ (UIImage *)placeholderIconForName:(NSString *)name {
+    CGFloat s = 40;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(s, s), NO, 0);
+    [[UIColor colorWithWhite:0.9 alpha:1] setFill];
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, s, s) cornerRadius:9];
+    [path fill];
+    NSString *letter = @"";
+    if (name.length) letter = [name substringToIndex:1].uppercaseString;
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [UIFont systemFontOfSize:18 weight:UIFontWeightMedium],
+        NSForegroundColorAttributeName: [UIColor grayColor]
+    };
+    CGSize ts = [letter sizeWithAttributes:attrs];
+    [letter drawAtPoint:CGPointMake((s - ts.width)/2, (s - ts.height)/2) withAttributes:attrs];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"支持的应用";
+    self.title = @"选择应用";
     self.tableView.rowHeight = 64;
     self.tableView.separatorInset = UIEdgeInsetsMake(0, 70, 0, 0);
     [self.tableView registerClass:[ONYXAppCell class] forCellReuseIdentifier:@"app"];
 
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(doneTapped:)];
+    // 搜索
+    self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
+    self.searchController.searchResultsUpdater = self;
+    self.searchController.obscuresBackgroundDuringPresentation = NO;
+    self.searchController.searchBar.placeholder = @"搜索应用名或 bundle id";
+    self.navigationItem.searchController = self.searchController;
+    self.navigationItem.hidesSearchBarWhenScrolling = NO;
+
+    // 导航按钮：清除 / 完成
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"清除"
+                                                                              style:UIBarButtonItemStylePlain
+                                                                             target:self
+                                                                             action:@selector(clearTapped:)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"完成"
+                                                                               style:UIBarButtonItemStyleDone
+                                                                              target:self
+                                                                              action:@selector(doneTapped:)];
 
     self.apps = [[self class] allApplications];
-    self.selected = [NSMutableSet setWithArray:[[NSUserDefaults standardUserDefaults] objectForKey:@"SelectedApps"] ?: @[]];
+    self.filteredApps = self.apps;
+
+    // 关键修复：和 saveSelected 一样从 CFPreferences 读，而不是 NSUserDefaults
+    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    if (arr) {
+        self.selected = [NSMutableSet setWithArray:(__bridge NSArray *)arr];
+        CFRelease(arr);
+    } else {
+        self.selected = [NSMutableSet set];
+    }
+}
+
+#pragma mark - data source
+
+- (NSArray<NSDictionary *> *)currentApps {
+    return self.isSearching ? self.filteredApps : self.apps;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.apps.count;
+    return [self currentApps].count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     ONYXAppCell *cell = [tableView dequeueReusableCellWithIdentifier:@"app" forIndexPath:indexPath];
-    NSDictionary *app = self.apps[indexPath.row];
+    NSDictionary *app = [self currentApps][indexPath.row];
     NSString *bid = app[@"bid"];
-    cell.nameLabel.text = app[@"name"];
+    NSString *name = app[@"name"];
+    cell.nameLabel.text = name;
     cell.bundleLabel.text = bid;
-    cell.iconView.image = [[self class] iconForBundleIdentifier:bid];
+
+    UIImage *icon = [[self class] iconForBundleIdentifier:bid];
+    if (!icon) icon = [[self class] placeholderIconForName:name];
+    cell.iconView.image = icon;
+
     cell.sw.on = [self.selected containsObject:bid];
     cell.sw.tag = indexPath.row;
+    [cell.sw removeTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [cell.sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     return cell;
 }
 
 - (void)switchChanged:(UISwitch *)sender {
-    NSDictionary *app = self.apps[sender.tag];
+    NSArray *list = [self currentApps];
+    if (sender.tag >= (NSInteger)list.count) return;
+    NSDictionary *app = list[sender.tag];
     NSString *bid = app[@"bid"];
     if (sender.on) [self.selected addObject:bid];
     else [self.selected removeObject:bid];
@@ -164,8 +233,42 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
 }
 
+- (void)clearTapped:(id)sender {
+    if (self.selected.count == 0) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"清除选择"
+                                                                   message:@"确定清空所有已选应用？"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"清除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self.selected removeAllObjects];
+        [self saveSelected];
+        [self.tableView reloadData];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)doneTapped:(id)sender {
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark - UISearchResultsUpdating
+
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
+    NSString *text = searchController.searchBar.text ?: @"";
+    text = [text lowercaseString];
+    if (!text.length) {
+        self.isSearching = NO;
+        self.filteredApps = self.apps;
+    } else {
+        self.isSearching = YES;
+        self.filteredApps = [self.apps filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *bindings) {
+            NSDictionary *app = obj;
+            NSString *name = [app[@"name"] lowercaseString];
+            NSString *bid = [app[@"bid"] lowercaseString];
+            return [name containsString:text] || [bid containsString:text];
+        }]];
+    }
+    [self.tableView reloadData];
 }
 
 @end
