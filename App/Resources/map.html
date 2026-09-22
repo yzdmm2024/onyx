@@ -18,10 +18,14 @@
   .ctrl{position:absolute;right:12px;width:40px;height:40px;border-radius:10px;
     background:rgba(255,255,255,.94);box-shadow:0 1px 5px rgba(0,0,0,.3);
     display:flex;align-items:center;justify-content:center;font-size:26px;color:#222;
-    user-select:none;-webkit-user-select:none;line-height:1;}
+    user-select:none;-webkit-user-select:none;line-height:1;z-index:30;}
   #zin{top:14px;} #zout{top:62px;}
   #hint{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,.55);color:#fff;
-    font-size:12px;padding:6px 10px;border-radius:8px;max-width:62%;line-height:1.4;}
+    font-size:12px;padding:6px 10px;border-radius:8px;max-width:62%;line-height:1.4;z-index:30;}
+  #err{position:absolute;left:10px;right:10px;top:50%;transform:translateY(-50%);
+    background:rgba(140,0,0,.9);color:#fff;font-size:13px;line-height:1.55;
+    padding:14px 16px;border-radius:12px;display:none;white-space:pre-wrap;z-index:60;
+    box-shadow:0 4px 16px rgba(0,0,0,.4);}
 </style>
 </head>
 <body>
@@ -29,20 +33,27 @@
 <div id="zin" class="ctrl">+</div>
 <div id="zout" class="ctrl">&minus;</div>
 <div id="hint">拖动平移 · 点击选点 · 右上角 +/− 缩放</div>
+<div id="err"></div>
 <script>
 (function(){
   var mapEl=document.getElementById('map');
   var markerEl=document.getElementById('marker');
+  var errEl=document.getElementById('err');
   var TILE=256;
   var state={zoom:11,clng:121.4737,clat:31.2304,mlng:null,mlat:null};
-  var loaded=0, failed=0, reported=false;
+  var loaded=0, failed=0, attempted=0;
 
   function diag(msg){
-    reported=true;
     if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.onyx){
       window.webkit.messageHandlers.onyx.postMessage({type:'diag',msg:msg});
     }
   }
+  function showErr(text){
+    errEl.style.display='block';
+    errEl.textContent=text;
+  }
+  function hideErr(){ errEl.style.display='none'; }
+
   window.addEventListener('error',function(e){
     diag('JS错误: '+(e.message||e.error||'unknown')+' @'+(e.lineno||0));
   });
@@ -61,14 +72,57 @@
     var lat=Math.atan(Math.sinh(Math.PI-(2*y/TILE/n*Math.PI*2)))*180/Math.PI;
     return {lng:lng,lat:lat};
   }
-  // 走自定义 onyx:// scheme，由 App 原生取图（绕过 file:// 跨域/ATS）
-  function tileUrl(x,y,z){
-    return 'onyx://tile?x='+x+'&y='+y+'&z='+z;
+
+  // 三级回退瓦片源（逐级尝试，任一成功即用）：
+  //   0) onyx://       —— 由 App 原生 NSURLSession 取高德图（App 进程网络最稳）
+  //   1) 高德直连 https —— WebContent 进程直接取高德图
+  //   2) OSM 直连 https —— 公开瓦片，必定可热链，用于兜底证明渲染管线正常
+  function nameOf(s){ return s===0?'onyx://':s===1?'高德直连':'OSM'; }
+  function urlFor(x,y,z,s){
+    if(s===0) return 'onyx://tile?x='+x+'&y='+y+'&z='+z;
+    if(s===1){
+      var sub=1+((x+y)%4);
+      return 'https://webrd0'+sub+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x='+x+'&y='+y+'&z='+z;
+    }
+    return 'https://tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
   }
-  var _retry=0;
+
+  // 单张瓦片：逐源尝试，超时(6s)或加载失败则切下一个源；全部失败显示错误。
+  function loadTile(tx,ty,z,ox,oy){
+    attempted++;
+    var settled=false, stage=0;
+    function attempt(s){
+      if(settled) return;
+      if(s>2){ failed++; showErr(
+        '地图瓦片加载失败\n\n已尝试三级源均不可用：\n  1. onyx:// 原生取图\n  2. 高德直连 https\n  3. OSM 直连 https\n\n失败 '+failed+' 张。\n'+
+        '可能原因：设备无法访问外网 / 证书校验失败 / WebView 网络被限。\n可在 Mac Safari→开发→iPhone 看控制台，或把上方「地图诊断」文字发我。');
+        diag('瓦片全部失败 #'+failed); return; }
+      var img=document.createElement('img');
+      img.className='tile';
+      img.style.left=(ox+tx*TILE)+'px';
+      img.style.top=(oy+ty*TILE)+'px';
+      var to=setTimeout(function(){
+        if(settled) return;
+        img.src=''; img.remove(); attempt(s+1);
+      },6000);
+      img.onload=function(){
+        if(settled) return; settled=true; clearTimeout(to);
+        loaded++; hideErr();
+        if(loaded===1) diag('首张瓦片已显示（来源：'+nameOf(s)+'）');
+      };
+      img.onerror=function(){
+        if(settled) return; clearTimeout(to);
+        img.remove(); attempt(s+1);
+      };
+      img.src=urlFor(tx,ty,z,s);
+      mapEl.appendChild(img);
+    }
+    attempt(0);
+  }
+
   function render(){
     var w=mapEl.clientWidth,h=mapEl.clientHeight;
-    if(!w||!h){ if(_retry++<10) requestAnimationFrame(render); return; }
+    if(!w||!h){ requestAnimationFrame(render); return; }
     var c=lngLatToWorld(state.clng,state.clat,state.zoom);
     var ox=w/2-c.x, oy=h/2-c.y;
     var old=mapEl.querySelectorAll('.tile');
@@ -79,16 +133,7 @@
     for(var tx=minX;tx<=maxX;tx++){
       for(var ty=minY;ty<=maxY;ty++){
         if(tx<0||ty<0||tx>=n||ty>=n) continue;
-        (function(tx,ty){
-          var img=document.createElement('img');
-          img.className='tile';
-          img.style.left=(ox+tx*TILE)+'px';
-          img.style.top=(oy+ty*TILE)+'px';
-          img.onload=function(){ loaded++; if(loaded===1) diag('瓦片加载正常（已显示首张）'); };
-          img.onerror=function(){ failed++; diag('瓦片加载失败 #'+failed+' x='+tx+' y='+ty+' z='+state.zoom); };
-          img.src=tileUrl(tx,ty,state.zoom);
-          mapEl.appendChild(img);
-        })(tx,ty);
+        loadTile(tx,ty,state.zoom,ox,oy);
       }
     }
     if(state.mlng!==null){

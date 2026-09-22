@@ -10,6 +10,9 @@ static NSURL *realTileURL(NSInteger x, NSInteger y, NSInteger z) {
     return [NSURL URLWithString:s];
 }
 
+static NSString *const kUA = @"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+
 @implementation ONYXTileSchemeHandler
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
@@ -27,19 +30,37 @@ static NSURL *realTileURL(NSInteger x, NSInteger y, NSInteger z) {
         return;
     }
     NSURL *real = realTileURL(x, y, z);
-    NSURLSession *session = [NSURLSession sharedSession];
-    NSURLSessionDataTask *dt = [session dataTaskWithURL:real completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        if (err || !data || data.length == 0) {
-            [urlSchemeTask didFailWithError:err ?: [NSError errorWithDomain:@"onyx" code:500 userInfo:@{NSLocalizedDescriptionKey:@"empty tile"}]];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:real
+                                                       cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                   timeoutInterval:12];
+    [req setValue:kUA forHTTPHeaderField:@"User-Agent"];
+    // 高德对 Referer/UA 敏感，带一个常见移动端 Referer 降低被拦概率
+    [req setValue:@"https://www.amap.com/" forHTTPHeaderField:@"Referer"];
+
+    NSURLSessionDataTask *dt = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        NSHTTPURLResponse *realResp = (NSHTTPURLResponse *)resp;
+        NSInteger code = realResp ? realResp.statusCode : 0;
+        if (err) {
+            [urlSchemeTask didFailWithError:err];
+            return;
+        }
+        if (code != 200 || !data || data.length == 0) {
+            // 非 200（403/404 等）或空响应：明确失败，让网页切到高德/OSM 直连兜底
+            NSError *e = [NSError errorWithDomain:@"onyx" code:code
+                                userInfo:@{NSLocalizedDescriptionKey:
+                                    [NSString stringWithFormat:@"高德返回状态 %ld", (long)code]}];
+            [urlSchemeTask didFailWithError:e];
             return;
         }
         // 强制 image/png，避免 WebView 因 content-type 拒显
-        NSHTTPURLResponse *realResp = (NSHTTPURLResponse *)resp;
-        NSInteger code = realResp ? realResp.statusCode : 200;
         NSMutableDictionary *hdrs = [NSMutableDictionary dictionary];
         [hdrs setValue:@"image/png" forKey:@"Content-Type"];
         [hdrs setValue:[NSString stringWithFormat:@"%lu", (unsigned long)data.length] forKey:@"Content-Length"];
-        NSHTTPURLResponse *r = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:code HTTPVersion:@"HTTP/1.1" headerFields:hdrs];
+        NSHTTPURLResponse *r = [[NSHTTPURLResponse alloc] initWithURL:url
+                                                          statusCode:200
+                                                         HTTPVersion:@"HTTP/1.1"
+                                                        headerFields:hdrs];
         [urlSchemeTask didReceiveResponse:r];
         [urlSchemeTask didReceiveData:data];
         [urlSchemeTask didFinish];
