@@ -54,13 +54,8 @@ def gh(args, payload=None, raw=False):
         args = [args]
     cmd += list(args)
     if payload is not None:
-        fd, p = tempfile.mkstemp(suffix=".json")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        try:
-            r = subprocess.run(cmd + ["--input", p], capture_output=True, text=True)
-        finally:
-            os.remove(p)
+        body = json.dumps(payload)
+        r = subprocess.run(cmd + ["--input", "-"], input=body, capture_output=True, text=True)
     else:
         r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
