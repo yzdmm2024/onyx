@@ -35,6 +35,17 @@
   var markerEl=document.getElementById('marker');
   var TILE=256;
   var state={zoom:11,clng:121.4737,clat:31.2304,mlng:null,mlat:null};
+  var loaded=0, failed=0, reported=false;
+
+  function diag(msg){
+    reported=true;
+    if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.onyx){
+      window.webkit.messageHandlers.onyx.postMessage({type:'diag',msg:msg});
+    }
+  }
+  window.addEventListener('error',function(e){
+    diag('JS错误: '+(e.message||e.error||'unknown')+' @'+(e.lineno||0));
+  });
 
   function clampZoom(z){return Math.max(3,Math.min(18,z));}
   function lngLatToWorld(lng,lat,z){
@@ -50,14 +61,14 @@
     var lat=Math.atan(Math.sinh(Math.PI-(2*y/TILE/n*Math.PI*2)))*180/Math.PI;
     return {lng:lng,lat:lat};
   }
+  // 走自定义 onyx:// scheme，由 App 原生取图（绕过 file:// 跨域/ATS）
   function tileUrl(x,y,z){
-    var sub=1+((x+y)%4);
-    return 'https://wprd0'+sub+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x='+x+'&y='+y+'&z='+z;
+    return 'onyx://tile?x='+x+'&y='+y+'&z='+z;
   }
   var _retry=0;
   function render(){
     var w=mapEl.clientWidth,h=mapEl.clientHeight;
-    if(!w||!h){ if(_retry++<8) requestAnimationFrame(render); return; }
+    if(!w||!h){ if(_retry++<10) requestAnimationFrame(render); return; }
     var c=lngLatToWorld(state.clng,state.clat,state.zoom);
     var ox=w/2-c.x, oy=h/2-c.y;
     var old=mapEl.querySelectorAll('.tile');
@@ -68,13 +79,16 @@
     for(var tx=minX;tx<=maxX;tx++){
       for(var ty=minY;ty<=maxY;ty++){
         if(tx<0||ty<0||tx>=n||ty>=n) continue;
-        var img=document.createElement('img');
-        img.className='tile';
-        img.style.left=(ox+tx*TILE)+'px';
-        img.style.top=(oy+ty*TILE)+'px';
-        img.src=tileUrl(tx,ty,state.zoom);
-        img.onerror=function(){this.style.visibility='hidden';};
-        mapEl.appendChild(img);
+        (function(tx,ty){
+          var img=document.createElement('img');
+          img.className='tile';
+          img.style.left=(ox+tx*TILE)+'px';
+          img.style.top=(oy+ty*TILE)+'px';
+          img.onload=function(){ loaded++; if(loaded===1) diag('瓦片加载正常（已显示首张）'); };
+          img.onerror=function(){ failed++; diag('瓦片加载失败 #'+failed+' x='+tx+' y='+ty+' z='+state.zoom); };
+          img.src=tileUrl(tx,ty,state.zoom);
+          mapEl.appendChild(img);
+        })(tx,ty);
       }
     }
     if(state.mlng!==null){
@@ -118,7 +132,6 @@
   window.onyxClearMarker=function(){ state.mlng=null; state.mlat=null; render(); };
   window.onyxZoom=function(z){ state.zoom=clampZoom(z); render(); };
   render();
-  // tell native we are ready so it can push the initial coords
   if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.onyx){
     window.webkit.messageHandlers.onyx.postMessage({type:'ready'});
   }

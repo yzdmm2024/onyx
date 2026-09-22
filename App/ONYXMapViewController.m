@@ -1,6 +1,7 @@
 #import "ONYXMapViewController.h"
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
+#import "ONYXTileSchemeHandler.h"
 #import <WebKit/WebKit.h>
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
@@ -63,11 +64,28 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     // 瓦片请求会被拒（灰块）。网页地图只走普通 HTTPS 图片，无需该授权，自带中文标注。
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
     [cfg.userContentController addScriptMessageHandler:self name:@"onyx"];
+    // 瓦片走 onyx:// 自定义 scheme，由 App 原生 NSURLSession 取高德图回灌，
+    // 彻底绕过 file:// 跨域 / ATS / WebContent 进程网络限制。
+    [cfg setURLSchemeHandler:[[ONYXTileSchemeHandler alloc] init] forURLScheme:@"onyx"];
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
     self.webView.scrollView.scrollEnabled = NO;
     self.webView.backgroundColor = [UIColor colorWithRed:0.68 green:0.85 blue:1.0 alpha:1.0];
     self.webView.opaque = NO;
+    // iOS 16.4+ 允许 Mac Safari → 开发 → iPhone 远程调试此 WKWebView
+    // 注意：theos 用的是 14.5 SDK，无 inspectable 属性声明，故用 selector 调用避免编译错误
+    if (@available(iOS 16.4, *)) {
+        SEL insp = NSSelectorFromString(@"setInspectable:");
+        if ([self.webView respondsToSelector:insp]) {
+            NSMethodSignature *sig = [self.webView methodSignatureForSelector:insp];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setSelector:insp];
+            [inv setTarget:self.webView];
+            BOOL yes = YES;
+            [inv setArgument:&yes atIndex:2];
+            [inv invoke];
+        }
+    }
     [self.view addSubview:self.webView];
 
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"map" ofType:@"html"];
