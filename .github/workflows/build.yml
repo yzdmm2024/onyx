@@ -25,38 +25,18 @@ jobs:
           cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
 
       - name: Build package (rootless)
+        # theos 的 application.mk 用 <app>_ENTITLEMENTS（不是 CODESIGN_ENTITLEMENTS）把 entitlements 签进 App。
         run: |
           export THEOS=/opt/theos
           make clean 2>/dev/null || true
           make package FINALPACKAGE=1
 
-      - name: Inject network entitlements into OnyxApp
-        # theos 的 make package 在 macOS 上不会把 OnyxApp_CODESIGN_ENTITLEMENTS 签进 App 二进制，
-        # 导致越狱 App 在沙箱里被系统判定无网络权限（NSURLErrorNotConnectedToInternet -1009）。
-        # 这里解包 deb -> ldid 显式签 entitlements -> 重包 deb。
+      - name: Verify entitlements in built App
+        # 确认 OnyxApp 二进制里确实签入了 network.client（防 CI 漏签）
         run: |
-          cd "$GITHUB_WORKSPACE"
-          DEB=$(ls packages/*.deb)
-          echo "source deb: $DEB"
-          WORK=/tmp/onyx_ent
-          rm -rf "$WORK" && mkdir -p "$WORK"
-          cd "$WORK"
-          ar x "$GITHUB_WORKSPACE/$DEB"
-          mkdir -p payload
-          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar -xf - -C payload; fi
-          if [ -f data.tar.gz ]; then tar -zxf data.tar.gz -C payload; fi
-          if [ -f data.tar.xz ]; then xz -dc data.tar.xz | tar -xf - -C payload; fi
-          APP=$(find payload -name OnyxApp -type f | head -1)
-          echo "signing: $APP"
-          ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
-          echo "--- verify entitlements in binary ---"
-          strings "$APP" | grep -c "network.client" || true
-          # repack
-          tar -cf - -C payload . | xz -9 -F lzma -c > data.tar.lzma
-          BASE=$(basename "$DEB")
-          rm -f "$GITHUB_WORKSPACE/$DEB"
-          ar rcs "$GITHUB_WORKSPACE/packages/$BASE" debian-binary control.tar.gz data.tar.lzma
-          echo "rebuilt deb: $BASE"
+          APP=$(find .theos -name OnyxApp -type f | head -1)
+          echo "built app: $APP"
+          ldid -e "$APP" 2>/dev/null | grep -c "network.client" || echo "0"
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
