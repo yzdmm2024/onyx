@@ -95,25 +95,27 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
 + (UIImage *)iconForBundleIdentifier:(NSString *)bid {
     if (!bid.length) return nil;
-    // Use LSApplicationProxy's iconDataForVariant: -> UIImage to avoid linker issues.
+    // Use LSApplicationProxy via runtime to avoid header/linker dependencies.
     Class LSApplicationProxy = NSClassFromString(@"LSApplicationProxy");
     if (!LSApplicationProxy) return nil;
-    id proxy = [LSApplicationProxy applicationProxyForIdentifier:bid];
+    id proxy = [LSApplicationProxy performSelector:NSSelectorFromString(@"applicationProxyForIdentifier:") withObject:bid];
     if (!proxy) return nil;
+
     NSData *data = nil;
-    if ([proxy respondsToSelector:@selector(iconDataForVariant:)]) {
-        data = [proxy iconDataForVariant:2]; // 2 = default icon variant
+    if ([proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
+        data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:") withObject:@(2)];
     }
-    if (!data && [proxy respondsToSelector:@selector(iconDataForVariant:withOptions:)]) {
-        data = [proxy iconDataForVariant:2 withOptions:0];
+    if (!data && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:")]) {
+        data = [proxy performSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:") withObject:@(2) withObject:@(0)];
     }
-    if (data) {
+    if (data && [data isKindOfClass:[NSData class]]) {
         UIImage *img = [UIImage imageWithData:data];
         if (img) return img;
     }
-    // Fallback: try iconImageForDescription: if available.
-    if ([proxy respondsToSelector:@selector(iconImageForDescription:)]) {
-        return [proxy iconImageForDescription:nil];
+    // Fallback: iconImageForDescription:
+    if ([proxy respondsToSelector:NSSelectorFromString(@"iconImageForDescription:")]) {
+        id img = [proxy performSelector:NSSelectorFromString(@"iconImageForDescription:") withObject:nil];
+        if ([img isKindOfClass:[UIImage class]]) return img;
     }
     return nil;
 }
