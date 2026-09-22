@@ -2,12 +2,12 @@
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
 #import "ONYXMapView.h"
-#import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
+static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
-@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate, CLLocationManagerDelegate>
+@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
 @property (nonatomic, strong) ONYXMapView *mapView;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
@@ -24,7 +24,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
 @property (nonatomic, strong) UILabel *mapStatLabel;
-@property (nonatomic, strong) CLLocationManager *locManager;
+@property (nonatomic, strong) UISegmentedControl *recentControl;
 
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // WGS-84
 @property (nonatomic, assign) OnyxCoordSystem currentSystem;
@@ -49,28 +49,8 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self pushCurrentToMap:11];
 }
 
-- (void)viewDidAppear:(BOOL)animated {
-    [super viewDidAppear:animated];
-    // 请求定位权限，MKMapView 在某些中国区场景需要定位授权才能加载瓦片
-    if (!self.locManager) {
-        self.locManager = [[CLLocationManager alloc] init];
-        self.locManager.delegate = self;
-    }
-    CLAuthorizationStatus status;
-    if ([CLLocationManager respondsToSelector:@selector(authorizationStatus)]) {
-        status = [CLLocationManager authorizationStatus];
-    } else {
-        status = kCLAuthorizationStatusNotDetermined;
-    }
-    if (status == kCLAuthorizationStatusNotDetermined) {
-        [self.locManager requestWhenInUseAuthorization];
-    } else if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
-        [self.mapView setShowsUserLocation:YES];
-    }
-}
-
 #pragma mark - 坐标语义
-// 内部 currentCoord 为 WGS-84；MKMapView 底图即 WGS-84 名义坐标系，直通不转换。
+// 内部 currentCoord 为 WGS-84（与原模板一致）。
 
 - (void)setupNav {
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"应用" style:UIBarButtonItemStylePlain target:self action:@selector(openAppsList:)];
@@ -84,34 +64,13 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    // 系统地图视图：MKMapView + OSM 瓦片兜底；jailbreak 下 App 自身网络受限，依赖系统地图通道。
+    // 静态提示面板（jailbreak 自签 App 无法加载系统地图瓦片）
     self.mapView = [[ONYXMapView alloc] initWithFrame:CGRectZero];
     self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapView.delegate = self;
     [self.view addSubview:self.mapView];
 
-    // 缩放按钮
-    UIButton *zin = [UIButton buttonWithType:UIButtonTypeSystem];
-    zin.translatesAutoresizingMaskIntoConstraints = NO;
-    [zin setTitle:@"＋" forState:UIControlStateNormal];
-    zin.titleLabel.font = [UIFont systemFontOfSize:26 weight:UIFontWeightMedium];
-    [zin setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    zin.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.92];
-    zin.layer.cornerRadius = 10;
-    [zin addTarget:self action:@selector(zoomIn:) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:zin];
-
-    UIButton *zout = [UIButton buttonWithType:UIButtonTypeSystem];
-    zout.translatesAutoresizingMaskIntoConstraints = NO;
-    [zout setTitle:@"－" forState:UIControlStateNormal];
-    zout.titleLabel.font = [UIFont systemFontOfSize:26 weight:UIFontWeightMedium];
-    [zout setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    zout.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.92];
-    zout.layer.cornerRadius = 10;
-    [zout addTarget:self action:@selector(zoomOut:) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:zout];
-
-    // 诊断标签（原生，始终可见，显示瓦片取图成功/失败）
+    // 诊断标签
     self.mapStatLabel = [[UILabel alloc] init];
     self.mapStatLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapStatLabel.font = [UIFont systemFontOfSize:12];
@@ -119,7 +78,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.mapStatLabel.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
     self.mapStatLabel.layer.cornerRadius = 7;
     self.mapStatLabel.clipsToBounds = YES;
-    self.mapStatLabel.text = @"地图：加载中…";
+    self.mapStatLabel.text = @"地图：当前环境不可用";
     self.mapStatLabel.textAlignment = NSTextAlignmentCenter;
     [self.view addSubview:self.mapStatLabel];
 
@@ -134,15 +93,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         [self.mapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.mapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
         [self.mapView.heightAnchor constraintGreaterThanOrEqualToConstant:240],
-
-        [zin.trailingAnchor constraintEqualToAnchor:self.mapView.trailingAnchor constant:-12],
-        [zin.topAnchor constraintEqualToAnchor:self.mapView.topAnchor constant:14],
-        [zin.widthAnchor constraintEqualToConstant:40],
-        [zin.heightAnchor constraintEqualToConstant:40],
-        [zout.trailingAnchor constraintEqualToAnchor:self.mapView.trailingAnchor constant:-12],
-        [zout.topAnchor constraintEqualToAnchor:zin.bottomAnchor constant:8],
-        [zout.widthAnchor constraintEqualToConstant:40],
-        [zout.heightAnchor constraintEqualToConstant:40],
 
         [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.mapView.leadingAnchor constant:10],
         [self.mapStatLabel.bottomAnchor constraintEqualToAnchor:self.mapView.bottomAnchor constant:-10],
@@ -228,6 +178,18 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.quickField.font = [UIFont systemFontOfSize:15];
     [stack addArrangedSubview:self.quickField];
 
+    // 最近坐标
+    UILabel *recentTitle = [[UILabel alloc] init];
+    recentTitle.text = @"最近坐标";
+    recentTitle.textColor = [UIColor systemBlueColor];
+    recentTitle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    [stack addArrangedSubview:recentTitle];
+
+    self.recentControl = [[UISegmentedControl alloc] initWithItems:@[@"无"]];
+    self.recentControl.selectedSegmentIndex = 0;
+    [self.recentControl addTarget:self action:@selector(recentChanged:) forControlEvents:UIControlEventValueChanged];
+    [stack addArrangedSubview:self.recentControl];
+
     self.saveButton = [self buttonWithTitle:@"保存并应用" color:[UIColor systemBlueColor] action:@selector(saveTapped:)];
     [stack addArrangedSubview:self.saveButton];
 
@@ -282,7 +244,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 #pragma mark - ONYXMapViewDelegate
 
 - (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord {
-    // MKMapView 回传的是 WGS-84（苹果地图坐标系），直接存内部
+    // 提示面板/搜索/手动输入回传的均为 WGS-84，直接存内部
     self.currentCoord = coord;
     [self updateLabels];
     [self reverseGeocode:coord];
@@ -304,7 +266,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     });
 }
 
-// 把内部 WGS-84 坐标推到系统地图（MKMapView 坐标系即 WGS-84，直通）
+// 更新提示面板上显示的当前坐标
 - (void)pushCurrentToMap:(NSInteger)zoom {
     [self.mapView setCenterCoordinate:self.currentCoord zoom:zoom showMarker:YES];
 }
@@ -325,6 +287,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     if (lng) CFRelease(lng);
     if (en) CFRelease(en);
     [self updateStatus];
+    [self loadRecent];
 }
 
 - (void)saveState {
@@ -333,6 +296,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     CFPreferencesSetAppValue(CFSTR("enabled"), (__bridge CFNumberRef)@(self.running), CFSTR("com.yzdmm.onyx"));
     CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
+    [self saveRecent];
 }
 
 - (void)updateLabels {
@@ -390,7 +354,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self presentViewController:nav animated:YES completion:nil];
 }
 
-#pragma mark - Search（CLGeocoder 优先，MKLocalSearch 兜底，覆盖中国区）
+#pragma mark - Search（CLGeocoder 正向/反向地理编码，走系统 locationd）
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
     [searchBar resignFirstResponder];
@@ -423,22 +387,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
             [self applyPlacemark:placemarks.firstObject name:text];
             return;
         }
-        // 3) 兜底 MKLocalSearch（周边/英文更稳）
-        MKLocalSearchRequest *req = [[MKLocalSearchRequest alloc] init];
-        req.naturalLanguageQuery = text;
-        req.region = MKCoordinateRegionMakeWithDistance(CLLocationCoordinate2DMake(35.0, 105.0), 5000000, 5000000);
-        MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:req];
-        [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *err2) {
-            if (response.mapItems.count) {
-                MKMapItem *item = response.mapItems.firstObject;
-                self.currentCoord = item.placemark.coordinate;
-                [self updateLabels];
-                [self placePinAt:self.currentCoord];
-                self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", item.name ?: text];
-            } else {
-                self.addressLabel.text = [NSString stringWithFormat:@"未找到「%@」，可改输 纬度,经度", text];
-            }
-        }];
+        self.addressLabel.text = [NSString stringWithFormat:@"未找到「%@」，可改输 纬度,经度", text];
     }];
 }
 
@@ -471,26 +420,67 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     return YES;
 }
 
-#pragma mark - CLLocationManagerDelegate
+#pragma mark - 最近坐标
 
-- (void)locationManager:(CLLocationManager *)manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
-    if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
-        [self.mapView setShowsUserLocation:YES];
-    }
+- (void)saveRecent {
+    if (!CLLocationCoordinate2DIsValid(self.currentCoord)) return;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableArray *recents = [[defaults objectForKey:kRecentCoordsKey] mutableCopy] ?: [NSMutableArray array];
+    NSDictionary *entry = @{
+        @"lat": @(self.currentCoord.latitude),
+        @"lng": @(self.currentCoord.longitude),
+        @"time": @([[NSDate date] timeIntervalSince1970])
+    };
+    // 去重：若已有相同坐标移到最前
+    NSUInteger idx = [recents indexOfObjectPassingTest:^BOOL(id obj, NSUInteger i, BOOL *stop) {
+        NSDictionary *d = obj;
+        double la = [d[@"lat"] doubleValue];
+        double ln = [d[@"lng"] doubleValue];
+        return fabs(la - self.currentCoord.latitude) < 0.0001 && fabs(ln - self.currentCoord.longitude) < 0.0001;
+    }];
+    if (idx != NSNotFound) [recents removeObjectAtIndex:idx];
+    [recents insertObject:entry atIndex:0];
+    if (recents.count > 5) [recents removeObjectsInRange:NSMakeRange(5, recents.count - 5)];
+    [defaults setObject:recents forKey:kRecentCoordsKey];
+    [defaults synchronize];
+    [self loadRecent];
 }
 
-#if defined(__IPHONE_14_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_14_0
-- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
-    CLAuthorizationStatus status;
-    if (@available(iOS 14.0, *)) {
-        status = manager.authorizationStatus;
-    } else {
-        status = [CLLocationManager authorizationStatus];
+- (void)loadRecent {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *recents = [defaults objectForKey:kRecentCoordsKey] ?: @[];
+    NSMutableArray *titles = [NSMutableArray arrayWithObject:@"无"];
+    for (NSDictionary *d in recents) {
+        double la = [d[@"lat"] doubleValue];
+        double ln = [d[@"lng"] doubleValue];
+        NSString *title = [NSString stringWithFormat:@"%.4f, %.4f", la, ln];
+        [titles addObject:title];
     }
-    if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
-        [self.mapView setShowsUserLocation:YES];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.recentControl removeAllSegments];
+        for (NSString *t in titles) {
+            [self.recentControl insertSegmentWithTitle:t atIndex:self.recentControl.numberOfSegments animated:NO];
+        }
+        self.recentControl.selectedSegmentIndex = 0;
+    });
+}
+
+- (void)recentChanged:(UISegmentedControl *)sender {
+    NSInteger idx = sender.selectedSegmentIndex;
+    if (idx <= 0) return;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *recents = [defaults objectForKey:kRecentCoordsKey] ?: @[];
+    if (idx - 1 < (NSInteger)recents.count) {
+        NSDictionary *d = recents[idx - 1];
+        double la = [d[@"lat"] doubleValue];
+        double ln = [d[@"lng"] doubleValue];
+        self.currentSystem = OnyxCoordSystemWGS84;
+        self.systemControl.selectedSegmentIndex = 0;
+        self.currentCoord = CLLocationCoordinate2DMake(la, ln);
+        [self updateLabels];
+        [self placePinAt:self.currentCoord];
+        self.addressLabel.text = [NSString stringWithFormat:@"当前：最近坐标 %.6f, %.6f", la, ln];
     }
 }
-#endif
 
 @end
