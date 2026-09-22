@@ -10,11 +10,12 @@
 - (void)onyxMapViewDidFailWithError:(NSString *)error;
 @end
 
-// 由于 jailbreak 自签 App 无法加载系统地图瓦片，也不再自己取瓦片，
-// 这里用一个静态提示面板替代地图，引导用户用搜索或手动输入坐标。
+// jailbreak 自签 App 无法加载系统地图瓦片，这里用状态面板替代地图，
+// 直观显示：状态、已选应用数、目标坐标、最后更新时间。
 @interface ONYXMapView : UIView
 @property (nonatomic, weak) id<ONYXMapViewDelegate> delegate;
 - (void)setCenterCoordinate:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom showMarker:(BOOL)showMarker;
+- (void)setStatusRunning:(BOOL)running selectedCount:(NSInteger)count lastUpdated:(NSString *)lastUpdated;
 - (void)clearMarker;
 - (void)zoomIn;
 - (void)zoomOut;

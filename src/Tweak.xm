@@ -46,37 +46,67 @@ static BOOL _active(void) {
     return YES;
 }
 
+static CLLocationCoordinate2D _fakeCoord(void) {
+    return CLLocationCoordinate2DMake(s_lat, s_lng);
+}
+
+static CLLocation *_fakeLocation(void) {
+    return [[CLLocation alloc] initWithLatitude:s_lat longitude:s_lng];
+}
+
+static void _pushToDelegate(CLLocationManager *mgr) {
+    if (!_active()) return;
+    id del = mgr.delegate;
+    if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
+        CLLocation *loc = _fakeLocation();
+        [del locationManager:mgr didUpdateLocations:@[loc]];
+        NSLog(@"[Onyx] pushed fake CLLocation to delegate: %@ -> %.6f,%.6f", mgr, s_lat, s_lng);
+    }
+}
+
 static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
     _reload();
-    NSLog(@"[Onyx] reloaded enabled=%d hasCoord=%d bid=%@", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier);
+    NSLog(@"[Onyx] reloaded enabled=%d hasCoord=%d bid=%@ selected=%@", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier, s_selectedApps.allObjects);
 }
 
 %group OnyxHooks
 
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate {
-    if (_active()) return CLLocationCoordinate2DMake(s_lat, s_lng);
+    if (_active()) {
+        NSLog(@"[Onyx] hooked CLLocation.coordinate -> %.6f,%.6f", s_lat, s_lng);
+        return _fakeCoord();
+    }
     return %orig;
 }
 - (id)initWithLatitude:(double)lat longitude:(double)lng {
-    if (_active()) return %orig(s_lat, s_lng);
+    if (_active()) {
+        NSLog(@"[Onyx] hooked CLLocation initWithLatitude -> %.6f,%.6f", s_lat, s_lng);
+        return %orig(s_lat, s_lng);
+    }
     return %orig;
 }
 + (id)locationWithLatitude:(double)lat longitude:(double)lng {
-    if (_active()) return %orig(s_lat, s_lng);
+    if (_active()) {
+        NSLog(@"[Onyx] hooked CLLocation +locationWithLatitude -> %.6f,%.6f", s_lat, s_lng);
+        return %orig(s_lat, s_lng);
+    }
     return %orig;
 }
 %end
 
 %hook CLLocationManager
 - (CLLocation *)location {
-    if (_active()) return [[CLLocation alloc] initWithLatitude:s_lat longitude:s_lng];
+    if (_active()) {
+        NSLog(@"[Onyx] hooked CLLocationManager.location -> %.6f,%.6f", s_lat, s_lng);
+        return _fakeLocation();
+    }
     return %orig;
 }
 - (void)setDelegate:(id)delegate {
     %orig;
     if (_active()) {
-        // delegate 设好后立即推一次，确保冷启动时也能拿到假位置
+        NSLog(@"[Onyx] CLLocationManager.delegate set, pushing fake location");
         dispatch_async(dispatch_get_main_queue(), ^{
             [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
@@ -84,10 +114,10 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 }
 - (void)requestLocation {
     if (_active()) {
+        NSLog(@"[Onyx] hooked CLLocationManager.requestLocation -> %.6f,%.6f", s_lat, s_lng);
         id del = self.delegate;
         if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
-            CLLocation *loc = [[CLLocation alloc] initWithLatitude:s_lat longitude:s_lng];
-            [del locationManager:self didUpdateLocations:@[loc]];
+            [del locationManager:self didUpdateLocations:@[_fakeLocation()]];
         }
         return;
     }
@@ -96,11 +126,29 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 - (void)startUpdatingLocation {
     %orig;
     if (_active()) {
-        // 立即推（不延迟），多次推确保地图初始化后也被覆盖
+        NSLog(@"[Onyx] hooked CLLocationManager.startUpdatingLocation -> %.6f,%.6f", s_lat, s_lng);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self performSelector:@selector(_onyxFakePush) withObject:nil];
+        });
+    }
+}
+- (void)requestWhenInUseAuthorization {
+    %orig;
+    if (_active()) {
+        NSLog(@"[Onyx] CLLocationManager.requestWhenInUseAuthorization, pushing fake location");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self performSelector:@selector(_onyxFakePush) withObject:nil];
+        });
+    }
+}
+- (void)requestAlwaysAuthorization {
+    %orig;
+    if (_active()) {
+        NSLog(@"[Onyx] CLLocationManager.requestAlwaysAuthorization, pushing fake location");
+        dispatch_async(dispatch_get_main_queue(), ^{
             [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
     }
@@ -110,10 +158,144 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     if (!_active()) return;
     id del = self.delegate;
     if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
-        CLLocation *loc = [[CLLocation alloc] initWithLatitude:s_lat longitude:s_lng];
-        [del locationManager:self didUpdateLocations:@[loc]];
+        [del locationManager:self didUpdateLocations:@[_fakeLocation()]];
+        NSLog(@"[Onyx] _onyxFakePush -> %.6f,%.6f", s_lat, s_lng);
     }
 }
+%end
+
+// 百度定位 SDK（BMKLocationManager）
+%group BaiduHooks
+%hook BMKLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        NSLog(@"[Onyx] BMKLocationManager.startUpdatingLocation -> %.6f,%.6f", s_lat, s_lng);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(didUpdateLocation:)]) {
+                    CLLocation *loc = _fakeLocation();
+                    [del didUpdateLocation:loc];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithReGeocode:(BOOL)reGeocode completionBlock:(id)block {
+    if (_active()) {
+        NSLog(@"[Onyx] BMKLocationManager.requestLocationWithReGeocode -> %.6f,%.6f", s_lat, s_lng);
+        CLLocation *loc = _fakeLocation();
+        if (block) {
+            void (^cb)(CLLocation *l, id error, BOOL regeo) = (id)block;
+            cb(loc, nil, reGeocode);
+        }
+        return;
+    }
+    %orig;
+}
+- (void)requestLocationWithReGeocode:(BOOL)reGeocode locModelWithOption:(id)option completionBlock:(id)block {
+    if (_active()) {
+        NSLog(@"[Onyx] BMKLocationManager.requestLocationWithReGeocode:locModelWithOption -> %.6f,%.6f", s_lat, s_lng);
+        CLLocation *loc = _fakeLocation();
+        if (block) {
+            void (^cb)(CLLocation *l, id error, BOOL regeo) = (id)block;
+            cb(loc, nil, reGeocode);
+        }
+        return;
+    }
+    %orig;
+}
+%end
+%hook BMKLocation
+- (CLLocationCoordinate2D)coordinate {
+    if (_active()) {
+        NSLog(@"[Onyx] BMKLocation.coordinate -> %.6f,%.6f", s_lat, s_lng);
+        return _fakeCoord();
+    }
+    return %orig;
+}
+- (CLLocation *)location {
+    if (_active()) {
+        NSLog(@"[Onyx] BMKLocation.location -> %.6f,%.6f", s_lat, s_lng);
+        return _fakeLocation();
+    }
+    return %orig;
+}
+%end
+%end
+
+// 高德定位 SDK（AMapLocationManager）
+%group AMapHooks
+%hook AMapLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        NSLog(@"[Onyx] AMapLocationManager.startUpdatingLocation -> %.6f,%.6f", s_lat, s_lng);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(amapLocationManager:didUpdateLocation:reGeocode:)]) {
+                    [del amapLocationManager:self didUpdateLocation:_fakeLocation() reGeocode:nil];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithReGeocode:(BOOL)reGeocode completionBlock:(id)block {
+    if (_active()) {
+        NSLog(@"[Onyx] AMapLocationManager.requestLocationWithReGeocode -> %.6f,%.6f", s_lat, s_lng);
+        CLLocation *loc = _fakeLocation();
+        if (block) {
+            void (^cb)(CLLocation *l, id regeo, id error) = (id)block;
+            cb(loc, nil, nil);
+        }
+        return;
+    }
+    %orig;
+}
+%end
+%hook AMapLocation
+- (CLLocationCoordinate2D)coordinate {
+    if (_active()) {
+        NSLog(@"[Onyx] AMapLocation.coordinate -> %.6f,%.6f", s_lat, s_lng);
+        return _fakeCoord();
+    }
+    return %orig;
+}
+%end
+%end
+
+// 腾讯定位 SDK
+%group TencentHooks
+%hook TencentLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        NSLog(@"[Onyx] TencentLocationManager.startUpdatingLocation -> %.6f,%.6f", s_lat, s_lng);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocation:)]) {
+                    [del locationManager:self didUpdateLocation:_fakeLocation()];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithCompletionBlock:(id)block {
+    if (_active()) {
+        NSLog(@"[Onyx] TencentLocationManager.requestLocationWithCompletionBlock -> %.6f,%.6f", s_lat, s_lng);
+        CLLocation *loc = _fakeLocation();
+        if (block) {
+            void (^cb)(CLLocation *l, id error) = (id)block;
+            cb(loc, nil);
+        }
+        return;
+    }
+    %orig;
+}
+%end
 %end
 
 %end
@@ -123,5 +305,8 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
         onChanged, (CFStringRef)kChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     %init(OnyxHooks);
-    NSLog(@"[Onyx] loaded (enabled=%d hasCoord=%d bid=%@)", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier);
+    %init(BaiduHooks);
+    %init(AMapHooks);
+    %init(TencentHooks);
+    NSLog(@"[Onyx] loaded (enabled=%d hasCoord=%d bid=%@ selected=%@)", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier, s_selectedApps.allObjects);
 }

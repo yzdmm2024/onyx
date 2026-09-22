@@ -2,6 +2,7 @@
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
 #import "ONYXMapView.h"
+#import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
@@ -47,6 +48,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self loadState];
     [self updateLabels];
     [self pushCurrentToMap:11];
+    [self refreshStatusPanel];
 }
 
 #pragma mark - 坐标语义
@@ -286,6 +288,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     if (lat) CFRelease(lat);
     if (lng) CFRelease(lng);
     if (en) CFRelease(en);
+    if (self.running) {
+        [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
+    }
     [self updateStatus];
     [self loadRecent];
 }
@@ -309,6 +314,23 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.statusLabel.text = self.running ? @"状态：运行中" : @"状态：已停止";
     self.startButton.alpha = self.running ? 0.5 : 1.0;
     self.stopButton.alpha = self.running ? 1.0 : 0.5;
+    [self refreshStatusPanel];
+}
+
+- (void)refreshStatusPanel {
+    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    NSInteger count = 0;
+    if (arr) {
+        count = [(__bridge NSArray *)arr count];
+        CFRelease(arr);
+    }
+    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+    fmt.dateFormat = @"HH:mm:ss";
+    NSString *time = [fmt stringFromDate:[NSDate date]];
+    [self.mapView setStatusRunning:self.running selectedCount:count lastUpdated:time];
+    self.mapStatLabel.text = self.running
+        ? [NSString stringWithFormat:@"已启用 · %ld App", (long)count]
+        : @"已停止";
 }
 
 - (void)placePinAt:(CLLocationCoordinate2D)coord {
@@ -324,9 +346,14 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)saveTapped:(UIButton *)sender {
-    self.running = YES; // 「保存并应用」即启用，避免用户只点保存却没点开始导致 enabled=NO 不生效
+    self.running = YES;
     [self saveState];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:@"坐标已保存，定位修改已开启。请到「应用列表」勾选目标 App，然后重启该 App 生效。" preferredStyle:UIAlertControllerStyleAlert];
+    BOOL ok = [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
+    [self updateStatus];
+    NSString *msg = ok
+        ? @"系统级定位模拟已开启。所有使用系统定位的 App（包括百度/高德/微信等）都会收到此坐标。"
+        : [NSString stringWithFormat:@"保存成功，但系统级定位模拟启动失败：%@。可能是 entitlement 未生效或 iOS 版本不支持。", [ONYXLocationSimulator sharedSimulator].lastError ?: @"未知错误"];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -334,18 +361,21 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 - (void)applyTapped:(UIButton *)sender {
     self.running = YES;
     [self saveState];
+    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
     [self updateStatus];
 }
 
 - (void)startTapped:(UIButton *)sender {
     self.running = YES;
     [self saveState];
+    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
     [self updateStatus];
 }
 
 - (void)stopTapped:(UIButton *)sender {
     self.running = NO;
     [self saveState];
+    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
     [self updateStatus];
 }
 

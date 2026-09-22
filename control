@@ -1,9 +1,9 @@
 Package: com.yzdmm.onyx
 Name: Onyx
-Version: 0.2.13
+Version: 0.3.0
 Architecture: iphoneos-arm64
 Depends: firmware (>= 16.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
 Section: Tweaks
-Description: 按需控制指定 App 的系统返回值，独立 App 面板配置地图选点、搜索、坐标切换与目标应用。rootless 适配，A12+。
+Description: 系统级定位模拟，通过 CLSimulationManager + com.apple.locationd.simulation 私有 entitlement 向 locationd 注入坐标，全局影响所有 App。独立 App 面板配置坐标、搜索、最近记录。rootless 适配，A12+。
