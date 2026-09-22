@@ -163,6 +163,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     }
 }
 %end
+%end
 
 // 百度定位 SDK（BMKLocationManager）
 %group BaiduHooks
@@ -296,8 +297,6 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     %orig;
 }
 %end
-%end
-
 %end
 
 %ctor {
