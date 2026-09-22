@@ -20,8 +20,8 @@ Onyx_FRAMEWORKS = UIKit Foundation CoreLocation CoreGraphics
 # ===== 独立配置 App =====
 # 生成 /Applications/OnyxApp.app，桌面打开配置
 APPLICATION_NAME = OnyxApp
-OnyxApp_FILES = App/main.m App/ONYXAppDelegate.m App/ONYXMapViewController.m App/ONYXAppsViewController.m App/ONYXCoordTransform.m App/ONYXTileSchemeHandler.m
-OnyxApp_FRAMEWORKS = UIKit Foundation WebKit MapKit CoreLocation CoreGraphics
+OnyxApp_FILES = App/main.m App/ONYXAppDelegate.m App/ONYXMapViewController.m App/ONYXAppsViewController.m App/ONYXCoordTransform.m App/ONYXMapView.m
+OnyxApp_FRAMEWORKS = UIKit Foundation MapKit CoreLocation CoreGraphics
 OnyxApp_CFLAGS = -fobjc-arc -fobjc-exceptions -Wno-deprecated-declarations -w
 OnyxApp_LDFLAGS = -Wl,-undefined,dynamic_lookup
 OnyxApp_RESOURCE_DIRS = App/Resources

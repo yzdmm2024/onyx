@@ -1,15 +1,14 @@
 #import "ONYXMapViewController.h"
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
-#import "ONYXTileSchemeHandler.h"
-#import <WebKit/WebKit.h>
+#import "ONYXMapView.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
-@interface ONYXMapViewController () <WKScriptMessageHandler, UISearchBarDelegate, UITextFieldDelegate>
-@property (nonatomic, strong) WKWebView *webView;
+@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
+@property (nonatomic, strong) ONYXMapView *mapView;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
 @property (nonatomic, strong) UIView *sheetContent;
@@ -24,6 +23,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
+@property (nonatomic, strong) UILabel *mapStatLabel;
 
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // WGS-84
 @property (nonatomic, assign) OnyxCoordSystem currentSystem;
@@ -59,41 +59,44 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    // 用 WKWebView + 高德栅格瓦片渲染地图。
-    // 原因：MKMapView 加载瓦片需要 com.apple.mapkit 授权，adhoc/TrollStore 签名的 App 没有，
-    // 瓦片请求会被拒（灰块）。网页地图只走普通 HTTPS 图片，无需该授权，自带中文标注。
-    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
-    [cfg.userContentController addScriptMessageHandler:self name:@"onyx"];
-    // 瓦片走 onyx:// 自定义 scheme，由 App 原生 NSURLSession 取高德图回灌，
-    // 彻底绕过 file:// 跨域 / ATS / WebContent 进程网络限制。
-    [cfg setURLSchemeHandler:[[ONYXTileSchemeHandler alloc] init] forURLScheme:@"onyx"];
-    self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
-    self.webView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.webView.scrollView.scrollEnabled = NO;
-    self.webView.backgroundColor = [UIColor colorWithRed:0.68 green:0.85 blue:1.0 alpha:1.0];
-    self.webView.opaque = NO;
-    // iOS 16.4+ 允许 Mac Safari → 开发 → iPhone 远程调试此 WKWebView
-    // 注意：theos 用的是 14.5 SDK，无 inspectable 属性声明，故用 selector 调用避免编译错误
-    if (@available(iOS 16.4, *)) {
-        SEL insp = NSSelectorFromString(@"setInspectable:");
-        if ([self.webView respondsToSelector:insp]) {
-            NSMethodSignature *sig = [self.webView methodSignatureForSelector:insp];
-            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-            [inv setSelector:insp];
-            [inv setTarget:self.webView];
-            BOOL yes = YES;
-            [inv setArgument:&yes atIndex:2];
-            [inv invoke];
-        }
-    }
-    [self.view addSubview:self.webView];
+    // 原生地图视图：App 主进程 NSURLSession 平铺瓦片，绕开受限的 WebContent 子进程。
+    self.mapView = [[ONYXMapView alloc] initWithFrame:CGRectZero];
+    self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.mapView.delegate = self;
+    [self.view addSubview:self.mapView];
 
-    NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"map" ofType:@"html"];
-    if (htmlPath) {
-        NSURL *url = [NSURL fileURLWithPath:htmlPath];
-        NSURL *dir = [NSURL fileURLWithPath:[[NSBundle mainBundle] resourcePath] isDirectory:YES];
-        [self.webView loadFileURL:url allowingReadAccessToURL:dir];
-    }
+    // 缩放按钮
+    UIButton *zin = [UIButton buttonWithType:UIButtonTypeSystem];
+    zin.translatesAutoresizingMaskIntoConstraints = NO;
+    [zin setTitle:@"＋" forState:UIControlStateNormal];
+    zin.titleLabel.font = [UIFont systemFontOfSize:26 weight:UIFontWeightMedium];
+    [zin setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    zin.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.92];
+    zin.layer.cornerRadius = 10;
+    [zin addTarget:self action:@selector(zoomIn:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:zin];
+
+    UIButton *zout = [UIButton buttonWithType:UIButtonTypeSystem];
+    zout.translatesAutoresizingMaskIntoConstraints = NO;
+    [zout setTitle:@"－" forState:UIControlStateNormal];
+    zout.titleLabel.font = [UIFont systemFontOfSize:26 weight:UIFontWeightMedium];
+    [zout setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    zout.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.92];
+    zout.layer.cornerRadius = 10;
+    [zout addTarget:self action:@selector(zoomOut:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:zout];
+
+    // 诊断标签（原生，始终可见，显示瓦片取图成功/失败）
+    self.mapStatLabel = [[UILabel alloc] init];
+    self.mapStatLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.mapStatLabel.font = [UIFont systemFontOfSize:12];
+    self.mapStatLabel.textColor = [UIColor whiteColor];
+    self.mapStatLabel.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
+    self.mapStatLabel.layer.cornerRadius = 7;
+    self.mapStatLabel.clipsToBounds = YES;
+    self.mapStatLabel.text = @"地图：加载中…";
+    self.mapStatLabel.textAlignment = NSTextAlignmentCenter;
+    [self.view addSubview:self.mapStatLabel];
 
     [NSLayoutConstraint activateConstraints:@[
         [self.searchBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
@@ -101,13 +104,30 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         [self.searchBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.searchBar.heightAnchor constraintEqualToConstant:44],
 
-        [self.webView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
-        [self.webView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.webView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
-        [self.webView.heightAnchor constraintGreaterThanOrEqualToConstant:240]
+        [self.mapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
+        [self.mapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.mapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.mapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
+        [self.mapView.heightAnchor constraintGreaterThanOrEqualToConstant:240],
+
+        [zin.trailingAnchor constraintEqualToAnchor:self.mapView.trailingAnchor constant:-12],
+        [zin.topAnchor constraintEqualToAnchor:self.mapView.topAnchor constant:14],
+        [zin.widthAnchor constraintEqualToConstant:40],
+        [zin.heightAnchor constraintEqualToConstant:40],
+        [zout.trailingAnchor constraintEqualToAnchor:self.mapView.trailingAnchor constant:-12],
+        [zout.topAnchor constraintEqualToAnchor:zin.bottomAnchor constant:8],
+        [zout.widthAnchor constraintEqualToConstant:40],
+        [zout.heightAnchor constraintEqualToConstant:40],
+
+        [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.mapView.leadingAnchor constant:10],
+        [self.mapStatLabel.bottomAnchor constraintEqualToAnchor:self.mapView.bottomAnchor constant:-10],
+        [self.mapStatLabel.widthAnchor constraintEqualToConstant:170],
+        [self.mapStatLabel.heightAnchor constraintEqualToConstant:24]
     ]];
 }
+
+- (void)zoomIn:(id)sender { [self.mapView zoomIn]; }
+- (void)zoomOut:(id)sender { [self.mapView zoomOut]; }
 
 - (void)setupSheet {
     self.sheet = [[UIScrollView alloc] init];
@@ -120,7 +140,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self.sheet addSubview:self.sheetContent];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.sheet.topAnchor constraintEqualToAnchor:self.webView.bottomAnchor],
+        [self.sheet.topAnchor constraintEqualToAnchor:self.mapView.bottomAnchor],
         [self.sheet.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sheet.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -234,40 +254,26 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     return b;
 }
 
-#pragma mark - WKScriptMessageHandler
+#pragma mark - ONYXMapViewDelegate
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    if (![message.name isEqualToString:@"onyx"]) return;
-    NSDictionary *d = message.body;
-    NSString *type = d[@"type"];
-    if ([type isEqualToString:@"diag"]) {
-        NSString *msg = d[@"msg"];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.addressLabel.text = [@"地图诊断：" stringByAppendingString:msg ?: @""];
-        });
-        return;
-    }
-    if ([type isEqualToString:@"ready"]) {
-        [self pushCurrentToMap:11];
-        return;
-    }
-    if ([type isEqualToString:@"tap"]) {
-        // JS 回传的是高德(GCJ-02)坐标，转回 WGS-84 存内部
-        double lng = [d[@"lng"] doubleValue];
-        double lat = [d[@"lat"] doubleValue];
-        CLLocationCoordinate2D gcj = CLLocationCoordinate2DMake(lat, lng);
-        CLLocationCoordinate2D wgs = [ONYXCoordTransform convert:gcj fromSystem:OnyxCoordSystemGCJ02 toSystem:OnyxCoordSystemWGS84];
-        self.currentCoord = wgs;
-        [self updateLabels];
-        [self reverseGeocode:wgs];
-    }
+- (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord {
+    // 回传的是高德(GCJ-02)坐标，转回 WGS-84 存内部
+    CLLocationCoordinate2D wgs = [ONYXCoordTransform convert:coord fromSystem:OnyxCoordSystemGCJ02 toSystem:OnyxCoordSystemWGS84];
+    self.currentCoord = wgs;
+    [self updateLabels];
+    [self reverseGeocode:wgs];
 }
 
-// 把内部 WGS-84 坐标推到网页地图（网页底图是高德 GCJ-02）
+- (void)onyxMapViewDidUpdateStats:(NSString *)stats {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.mapStatLabel.text = [@"地图：" stringByAppendingString:stats ?: @""];
+    });
+}
+
+// 把内部 WGS-84 坐标推到原生地图（底图是高德 GCJ-02）
 - (void)pushCurrentToMap:(NSInteger)zoom {
     CLLocationCoordinate2D gcj = [ONYXCoordTransform convert:self.currentCoord fromSystem:OnyxCoordSystemWGS84 toSystem:OnyxCoordSystemGCJ02];
-    NSString *js = [NSString stringWithFormat:@"onyxSet(%@,%@,%ld,true)", @(gcj.longitude), @(gcj.latitude), (long)zoom];
-    [self.webView evaluateJavaScript:js completionHandler:nil];
+    [self.mapView setCenterCoordinate:gcj zoom:zoom showMarker:YES];
 }
 
 #pragma mark - State
@@ -430,10 +436,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self searchBarSearchButtonClicked:self.searchBar];
     [textField resignFirstResponder];
     return YES;
-}
-
-- (void)dealloc {
-    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"onyx"];
 }
 
 @end
