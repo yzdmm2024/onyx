@@ -4,3 +4,5 @@ packages/
 .build/
 *.o
 *.d
+.ci_artifacts/
+.ci_artifacts/
