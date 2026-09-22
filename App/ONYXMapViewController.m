@@ -4,7 +4,7 @@
 #import "ONYXMapView.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-#import <Security/SecCode.h>
+#import <dlfcn.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
@@ -55,22 +55,44 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     });
 }
 
-// 读取 App 自身签名 entitlements，确认 network.client 是否生效
+// 读取 App 自身签名 entitlements，确认 network.client 是否生效。
+// 14.5 SDK 不含 Security/SecCode.h，故用 dlopen 动态调用 Security 框架，不依赖 SDK 头。
 - (NSString *)networkEntitlementStatus {
     NSString *status = @"未知(读取失败)";
-    SecCodeRef code = NULL;
-    if (SecCodeCopySelf(kSecCSDefaultFlags, &code) == errSecSuccess) {
-        CFDictionaryRef sig = NULL;
-        if (SecCodeCopySigningInformation(code, kSecCSSigningInformation, &sig) == errSecSuccess) {
-            CFDictionaryRef ent = CFDictionaryGetValue(sig, kSecCodeInfoEntitlementsDict);
-            NSDictionary *e = (__bridge NSDictionary *)ent;
-            NSLog(@"[Onyx] 完整 entitlements = %@", e);
-            NSNumber *net = e[@"com.apple.security.network.client"];
-            status = ([net boolValue] ? @"✓已签入" : @"✗未签入");
-            CFRelease(sig);
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+    if (!sec) return status;
+    typedef OSStatus (*CopySelfFn)(int, void *);
+    typedef OSStatus (*CopyInfoFn)(void *, int, void *);
+    CopySelfFn SecCodeCopySelf = (CopySelfFn)dlsym(sec, "SecCodeCopySelf");
+    CopyInfoFn SecCodeCopySigningInformation = (CopyInfoFn)dlsym(sec, "SecCodeCopySigningInformation");
+    if (SecCodeCopySelf && SecCodeCopySigningInformation) {
+        void *code = NULL;
+        // kSecCSDefaultFlags = 0
+        if (SecCodeCopySelf(0, &code) == 0 && code) {
+            void *sig = NULL;
+            // kSecCSSigningInformation = 1
+            if (SecCodeCopySigningInformation(code, 1, &sig) == 0 && sig) {
+                // kSecCodeInfoEntitlementsDict = 7
+                CFDictionaryRef ent = CFDictionaryGetValue((CFDictionaryRef)sig, CFSTR("entitlements"));
+                if (!ent) {
+                    // 退化：直接枚举字典找 network.client
+                    NSDictionary *all = (__bridge NSDictionary *)sig;
+                    for (id k in all) {
+                        if ([k isKindOfClass:[NSString class]] && [k isEqualToString:@"entitlements"]) {
+                            ent = (__bridge CFDictionaryRef)(all[k]); break;
+                        }
+                    }
+                }
+                NSDictionary *e = (__bridge NSDictionary *)ent;
+                NSLog(@"[Onyx] entitlements = %@", e);
+                NSNumber *net = e[@"com.apple.security.network.client"];
+                status = ([net boolValue] ? @"✓已签入" : @"✗未签入");
+            }
+            if (sig) CFRelease(sig);
         }
-        CFRelease(code);
+        if (code) CFRelease(code);
     }
+    dlclose(sec);
     return status;
 }
 
