@@ -222,6 +222,13 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     if (![message.name isEqualToString:@"onyx"]) return;
     NSDictionary *d = message.body;
     NSString *type = d[@"type"];
+    if ([type isEqualToString:@"diag"]) {
+        NSString *msg = d[@"msg"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.addressLabel.text = [@"地图诊断：" stringByAppendingString:msg ?: @""];
+        });
+        return;
+    }
     if ([type isEqualToString:@"ready"]) {
         [self pushCurrentToMap:11];
         return;
