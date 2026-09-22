@@ -124,8 +124,9 @@ static NSArray *kAppList(void) {
         for (NSDictionary *a in kAppList()) {
             PSSpecifier *s = [PSSpecifier preferenceSpecifierNamed:a[@"n"]
                                                          target:self set:NULL get:NULL
-                                                        detail:nil cell:[OnyxAppCell class]
+                                                        detail:nil cell:PSListItemCell
                                                         edit:NULL];
+            [s setProperty:[OnyxAppCell class] forKey:@"cellClass"];
             [s setProperty:a[@"n"] forKey:@"displayName"];
             [s setProperty:a[@"b"] forKey:@"bundleId"];
             [s setProperty:a[@"b"] forKey:@"key"];   // 开关 key = bundle id（与 tweak 侧读取一致）
