@@ -4,7 +4,7 @@
 #import "ONYXMapView.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-#import <Security/Security.h>
+#import <Security/SecCode.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
