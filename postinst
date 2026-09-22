@@ -1,4 +1,11 @@
-#!/bin/bash
-# 装后注销主界面让设置入口与 tweak 重新加载（rootless 下 kill SpringBoard 即 respring）
-killall -9 SpringBoard 2>/dev/null || true
+#!/bin/sh
+set -e
+# Onyx postinst — refresh icon cache for the standalone app
+if [ -x /var/jb/usr/bin/uicache ]; then
+    /var/jb/usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
+elif [ -x /usr/bin/uicache ]; then
+    /usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
+fi
+# Notify SpringBoard to reload settings
+killall -9 cfprefsd 2>/dev/null || true
 exit 0

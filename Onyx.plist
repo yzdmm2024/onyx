@@ -2,43 +2,88 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- filter 文件名 = TWEAK 名 Onyx.plist，放项目根目录 -->
-	<!-- per-app 注入：只注入列表里的 App，未列出的 App 用真实值 -->
-	<!-- 注意：app 列表必须与 Preferences/OnyxSettingsController.m 里的 kAppList 保持一致 -->
-	<key>Filter</key>
-	<dict>
-		<key>Bundles</key>
-		<array>
-			<!-- 苹果自带 -->
-			<string>com.apple.Maps</string>
-			<string>com.apple.weather</string>
-			<string>com.apple.findmy.findmyapp</string>
-			<string>com.apple.reminders</string>
-			<string>com.apple.mobilecal</string>
-			<string>com.apple.mobileslideshow</string>
-			<string>com.apple.mobilesafari</string>
-			<string>com.apple.camera</string>
-			<string>com.apple.MobileSMS</string>
-			<string>com.apple.mobilemail</string>
-			<!-- 第三方 -->
-			<string>com.tencent.xin</string>
-			<string>com.tencent.mqq</string>
-			<string>com.autonavi.amap</string>
-			<string>com.baidu.BaiduMap</string>
-			<string>com.sdu.didi.psnger</string>
-			<string>com.meituan.imeituan</string>
-			<string>com.dianping.dpscope</string>
-			<string>com.ss.iphone.ugc.Aweme</string>
-			<string>com.smile.gifmaker</string>
-			<string>com.xingin.xhs</string>
-			<string>com.sina.weibo</string>
-			<string>com.alipay.iphoneclient</string>
-			<string>com.taobao.taobao4iphone</string>
-			<string>com.jingdong.app.mall</string>
-			<string>com.laiwang.DingTalk</string>
-			<string>tv.danmaku.bili</string>
-			<string>com.baidu.BaiduMobile</string>
-		</array>
-	</dict>
+    <key>Filter</key>
+    <dict>
+        <key>Bundles</key>
+        <array>
+            <!-- Apple 自带 -->
+            <string>com.apple.Maps</string>
+            <string>com.apple.weather</string>
+            <string>com.apple.compass</string>
+            <string>com.apple.Photos</string>
+            <string>com.apple.camera</string>
+            <string>com.apple.mobileme.fmf1</string>
+            <string>com.apple.mobileme.fmip1</string>
+            <string>com.apple.findmy</string>
+            <string>com.apple.CoreAuthUI</string>
+            <string>com.apple.Preferences</string>
+            <string>com.apple.Music</string>
+            <string>com.apple.podcasts</string>
+            <string>com.apple.videos</string>
+            <string>com.apple.AppStore</string>
+            <string>com.apple.store.Jolly</string>
+            <string>com.apple.SafariViewService</string>
+            <string>com.apple.social.SLComposeServiceViewController</string>
+            <string>com.apple.MailCompositionService</string>
+            <string>com.apple.mobilesafari</string>
+            <string>com.apple.mobilenotes</string>
+            <string>com.apple.reminders</string>
+            <string>com.apple.Calendar</string>
+            <string>com.apple.mobilecal</string>
+            <string>com.apple.Health</string>
+            <string>com.apple.Fitness</string>
+            <string>com.apple.shortcuts</string>
+            <string>com.apple.translate</string>
+            <string>com.apple.news</string>
+            <string>com.apple.stocks</string>
+            <string>com.apple.mobilesms</string>
+            <string>com.apple.MobileSMS</string>
+            <string>com.apple.mobileslideshow</string>
+            <string>com.apple.M Kobashi</string>
+            <!-- 常用三方 -->
+            <string>com.tencent.xin</string>
+            <string>com.tencent.wechat</string>
+            <string>com.tencent.mqq</string>
+            <string>com.alibaba.taobao</string>
+            <string>com.taobao.taobao4iphone</string>
+            <string>com.alipay.iphoneclient</string>
+            <string>com.eg.android.AlipayGphone</string>
+            <string>com.sina.weibo</string>
+            <string>com.baidu.BaiduMap</string>
+            <string>com.autonavi.amap</string>
+            <string>com.google.Maps</string>
+            <string>com.google.ios.youtube</string>
+            <string>com.facebook.Facebook</string>
+            <string>com.atebits.Tweetie2</string>
+            <string>net.whatsapp.WhatsApp</string>
+            <string>com.tencent.qqmail</string>
+            <string>com.netease.cloudmusic</string>
+            <string>com.spotify.client</string>
+            <string>com.ddchongzhi.BDiOS</string>
+            <string>com.didi.DiDiDriver</string>
+            <string>com.sdu.didi.gsuios</string>
+            <string>com.meituan.imeituan</string>
+            <string>com.dianping.dpscope</string>
+            <string>com.xiaojukeji.didi</string>
+            <string>com.jd.jinrong</string>
+            <string>com.jingdong.app.mall</string>
+            <string>com.suning.SuningEMall</string>
+            <string>com.baidu.netdisk</string>
+            <string>com.tencent.QQMusic</string>
+            <string>com.kugou.shoujiyinyue</string>
+            <string>com.xunmeng.pinduoduo</string>
+            <string>com.bilibili.app</string>
+            <string>com.zhihu.ios</string>
+            <string>com.xingin.discover</string>
+            <string>com.douyu.yanhua</string>
+            <string>com.huya.danmaku</string>
+            <string>com.smilegifmaker</string>
+            <string>com.tencent.ww</string>
+            <string>com.alibaba.android.rimet</string>
+            <string>com.feiteng.DingTalk</string>
+            <string>com.larksuite.lark</string>
+            <string>com.ss.iphone.ugc.Aweme</string>
+        </array>
+    </dict>
 </dict>
 </plist>

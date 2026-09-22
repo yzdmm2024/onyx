@@ -1,4 +1,4 @@
-# ============ Onyx Makefile：rootless tweak + 设置面板 ============
+# ============ Onyx Makefile：rootless tweak + 独立 App 配置面板 ============
 # 来源：键盘下方状态 v1.0.3 模板（CI 绿 + 真机面板可加载）
 # 适配：iOS16.0+（16.6 / 17.3 均测），Relaxin rootless
 
@@ -17,15 +17,17 @@ Onyx_FILES = src/Tweak.xm
 Onyx_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -w
 Onyx_FRAMEWORKS = UIKit Foundation CoreLocation CoreGraphics
 
-# ===== 设置面板 PreferenceBundle =====
-# Info.plist / Root.plist 放 layout/Library/PreferenceBundles/OnyxPrefs.bundle/
-BUNDLE_NAME = OnyxPrefs
-OnyxPrefs_FILES = Preferences/OnyxSettingsController.m
-OnyxPrefs_INSTALL_PATH = /Library/PreferenceBundles
-OnyxPrefs_FRAMEWORKS = UIKit Foundation
-OnyxPrefs_PRIVATE_FRAMEWORKS = Preferences   # 坑E：必须显式链 Preferences
-OnyxPrefs_LDFLAGS = -F$(TARGET_PRIVATE_FRAMEWORK_PATH)  # 坑3：补 -F 搜索路径
-OnyxPrefs_CFLAGS = -fobjc-arc -fobjc-exceptions -w
+# ===== 独立配置 App =====
+# 生成 /Applications/OnyxApp.app，桌面打开配置
+APPLICATION_NAME = OnyxApp
+OnyxApp_FILES = App/main.m App/ONYXAppDelegate.m App/ONYXMapViewController.m App/ONYXAppsViewController.m App/ONYXCoordTransform.m
+OnyxApp_FRAMEWORKS = UIKit Foundation MapKit CoreLocation CoreGraphics
+OnyxApp_CFLAGS = -fobjc-arc -fobjc-exceptions -Wno-deprecated-declarations -w
+OnyxApp_LDFLAGS = -Wl,-undefined,dynamic_lookup
+OnyxApp_RESOURCE_DIRS = App/Resources
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-include $(THEOS_MAKE_PATH)/bundle.mk
+include $(THEOS_MAKE_PATH)/application.mk
+
+after-install::
+	install.exec "uicache -p /var/jb/Applications/OnyxApp.app"
