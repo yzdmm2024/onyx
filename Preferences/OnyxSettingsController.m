@@ -41,7 +41,11 @@ static NSArray *kAppList(void) {
 
 #pragma mark - 自定义应用行 cell（显示名 + bundle id + 开关，宽松排版，总开关关时置灰）
 
-@interface OnyxAppCell : PSTableCell
+@interface OnyxAppCell : PSTableCell {
+    UILabel *_titleLabel;
+    UILabel *_subLabel;
+    UISwitch *_sw;
+}
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *subLabel;
 @property (nonatomic, strong) UISwitch *sw;
