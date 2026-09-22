@@ -4,7 +4,6 @@
 #import "ONYXMapView.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-#import <dlfcn.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
@@ -46,55 +45,11 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self setupSheet];
     [self loadState];
     [self updateLabels];
-
-    // 诊断：启动时读取自身 entitlements，确认 network.client 是否真正签入（防 CI 漏签）
-    NSString *netStatus = [self networkEntitlementStatus];
-    NSLog(@"[Onyx] 网络授权状态: %@", netStatus);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.mapStatLabel.text = [@"授权：" stringByAppendingString:netStatus];
-    });
+    [self pushCurrentToMap:11];
 }
 
-// 读取 App 自身签名 entitlements，确认 network.client 是否生效。
-// 14.5 SDK 不含 Security/SecCode.h，故用 dlopen 动态调用 Security 框架，不依赖 SDK 头。
-- (NSString *)networkEntitlementStatus {
-    NSString *status = @"未知(读取失败)";
-    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
-    if (!sec) return status;
-    typedef OSStatus (*CopySelfFn)(int, void *);
-    typedef OSStatus (*CopyInfoFn)(void *, int, void *);
-    CopySelfFn SecCodeCopySelf = (CopySelfFn)dlsym(sec, "SecCodeCopySelf");
-    CopyInfoFn SecCodeCopySigningInformation = (CopyInfoFn)dlsym(sec, "SecCodeCopySigningInformation");
-    if (SecCodeCopySelf && SecCodeCopySigningInformation) {
-        void *code = NULL;
-        // kSecCSDefaultFlags = 0
-        if (SecCodeCopySelf(0, &code) == 0 && code) {
-            void *sig = NULL;
-            // kSecCSSigningInformation = 1
-            if (SecCodeCopySigningInformation(code, 1, &sig) == 0 && sig) {
-                // kSecCodeInfoEntitlementsDict = 7
-                CFDictionaryRef ent = CFDictionaryGetValue((CFDictionaryRef)sig, CFSTR("entitlements"));
-                if (!ent) {
-                    // 退化：直接枚举字典找 network.client
-                    NSDictionary *all = (__bridge NSDictionary *)sig;
-                    for (id k in all) {
-                        if ([k isKindOfClass:[NSString class]] && [k isEqualToString:@"entitlements"]) {
-                            ent = (__bridge CFDictionaryRef)(all[k]); break;
-                        }
-                    }
-                }
-                NSDictionary *e = (__bridge NSDictionary *)ent;
-                NSLog(@"[Onyx] entitlements = %@", e);
-                NSNumber *net = e[@"com.apple.security.network.client"];
-                status = ([net boolValue] ? @"✓已签入" : @"✗未签入");
-            }
-            if (sig) CFRelease(sig);
-        }
-        if (code) CFRelease(code);
-    }
-    dlclose(sec);
-    return status;
-}
+#pragma mark - 坐标语义
+// 内部 currentCoord 为 WGS-84；MKMapView 底图即 WGS-84 名义坐标系，直通不转换。
 
 - (void)setupNav {
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"应用" style:UIBarButtonItemStylePlain target:self action:@selector(openAppsList:)];
@@ -306,11 +261,10 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 #pragma mark - ONYXMapViewDelegate
 
 - (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord {
-    // 回传的是高德(GCJ-02)坐标，转回 WGS-84 存内部
-    CLLocationCoordinate2D wgs = [ONYXCoordTransform convert:coord fromSystem:OnyxCoordSystemGCJ02 toSystem:OnyxCoordSystemWGS84];
-    self.currentCoord = wgs;
+    // MKMapView 回传的是 WGS-84（苹果地图坐标系），直接存内部
+    self.currentCoord = coord;
     [self updateLabels];
-    [self reverseGeocode:wgs];
+    [self reverseGeocode:coord];
 }
 
 - (void)onyxMapViewDidUpdateStats:(NSString *)stats {
@@ -320,20 +274,18 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 - (void)onyxMapViewDidFailWithError:(NSString *)error {
-    NSString *netStatus = [self networkEntitlementStatus];
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"地图瓦片加载失败"
-            message:[NSString stringWithFormat:@"错误：%@\n网络授权：%@\n\n若授权为「✗未签入」= App 沙箱限制联网（CI 漏签 entitlements）；若「✓已签入」仍失败=设备网络环境限制（代理/DNS/防火墙）。高德与 OSM 两条源均已尝试失败。", error ?: @"", netStatus]
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"地图加载失败"
+            message:[NSString stringWithFormat:@"%@\n\n若一直失败，多为系统地图通道不可用（mapkit 授权未生效）。可改用顶部「搜索」或底部手动输入 纬度,经度 定位。", error ?: @""]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
     });
 }
 
-// 把内部 WGS-84 坐标推到原生地图（底图是高德 GCJ-02）
+// 把内部 WGS-84 坐标推到系统地图（MKMapView 坐标系即 WGS-84，直通）
 - (void)pushCurrentToMap:(NSInteger)zoom {
-    CLLocationCoordinate2D gcj = [ONYXCoordTransform convert:self.currentCoord fromSystem:OnyxCoordSystemWGS84 toSystem:OnyxCoordSystemGCJ02];
-    [self.mapView setCenterCoordinate:gcj zoom:zoom showMarker:YES];
+    [self.mapView setCenterCoordinate:self.currentCoord zoom:zoom showMarker:YES];
 }
 
 #pragma mark - State

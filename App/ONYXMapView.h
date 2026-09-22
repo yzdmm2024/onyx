@@ -1,19 +1,19 @@
 #import <UIKit/UIKit.h>
 #import <CoreLocation/CoreLocation.h>
+#import <MapKit/MapKit.h>
 
 @protocol ONYXMapViewDelegate <NSObject>
-// 回传的是底图坐标系(GCJ-02)选中的经纬度
+// 回传 WGS-84 坐标（MKMapView 坐标系）
 - (void)onyxMapViewDidPickCoordinate:(CLLocationCoordinate2D)coord;
-// 诊断：瓦片取图成功/失败计数 + 末次失败原因
+// 诊断：地图加载状态
 - (void)onyxMapViewDidUpdateStats:(NSString *)stats;
 @optional
-// 首次失败详情（用于弹 alert，一眼定位根因）
 - (void)onyxMapViewDidFailWithError:(NSString *)error;
 @end
 
-@interface ONYXMapView : UIView
+@interface ONYXMapView : UIView <MKMapViewDelegate>
 @property (nonatomic, weak) id<ONYXMapViewDelegate> delegate;
-// coord 为 GCJ-02（高德底图坐标）
+// coord 为 WGS-84（苹果地图坐标系）
 - (void)setCenterCoordinate:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom showMarker:(BOOL)showMarker;
 - (void)clearMarker;
 - (void)zoomIn;
