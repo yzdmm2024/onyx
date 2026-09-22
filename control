@@ -1,0 +1,9 @@
+Package: com.yzdmm.onyx
+Name: Onyx
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Depends: firmware (>= 16.0), mobilesubstrate, preferenceloader
+Maintainer: yzdmm
+Author: yzdmm
+Section: Tweaks
+Description: 按需控制指定 App 的系统返回值，在设置内按 App 开关。rootless 适配，A12+。

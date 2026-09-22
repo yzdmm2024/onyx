@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- filter 文件名 = TWEAK 名 Onyx.plist，放项目根目录 -->
+	<!-- per-app 注入：只注入列表里的 App，未列出的 App 用真实值 -->
+	<!-- 注意：app 列表必须与 Preferences/OnyxSettingsController.m 里的 kAppList 保持一致 -->
+	<key>Filter</key>
+	<dict>
+		<key>Bundles</key>
+		<array>
+			<!-- 苹果自带 -->
+			<string>com.apple.Maps</string>
+			<string>com.apple.weather</string>
+			<string>com.apple.findmy.findmyapp</string>
+			<string>com.apple.reminders</string>
+			<string>com.apple.mobilecal</string>
+			<string>com.apple.mobileslideshow</string>
+			<string>com.apple.mobilesafari</string>
+			<string>com.apple.camera</string>
+			<string>com.apple.MobileSMS</string>
+			<string>com.apple.mobilemail</string>
+			<!-- 第三方 -->
+			<string>com.tencent.xin</string>
+			<string>com.tencent.mqq</string>
+			<string>com.autonavi.amap</string>
+			<string>com.baidu.BaiduMap</string>
+			<string>com.sdu.didi.psnger</string>
+			<string>com.meituan.imeituan</string>
+			<string>com.dianping.dpscope</string>
+			<string>com.ss.iphone.ugc.Aweme</string>
+			<string>com.smile.gifmaker</string>
+			<string>com.xingin.xhs</string>
+			<string>com.sina.weibo</string>
+			<string>com.alipay.iphoneclient</string>
+			<string>com.taobao.taobao4iphone</string>
+			<string>com.jingdong.app.mall</string>
+			<string>com.laiwang.DingTalk</string>
+			<string>tv.danmaku.bili</string>
+			<string>com.baidu.BaiduMobile</string>
+		</array>
+	</dict>
+</dict>
+</plist>

@@ -1,0 +1,6 @@
+# theos 构建产物
+packages/
+.obj/
+.build/
+*.o
+*.d

@@ -1,0 +1,4 @@
+#!/bin/bash
+# 安装前清理旧入口，避免设置里出现重复/失效项
+rm -f "/var/jb/Library/PreferenceLoader/Preferences/Onyx.plist" 2>/dev/null || true
+exit 0
