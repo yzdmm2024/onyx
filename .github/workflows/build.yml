@@ -25,18 +25,51 @@ jobs:
           cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
 
       - name: Build package (rootless)
-        # theos 的 application.mk 用 <app>_ENTITLEMENTS（不是 CODESIGN_ENTITLEMENTS）把 entitlements 签进 App。
         run: |
           export THEOS=/opt/theos
           make clean 2>/dev/null || true
           make package FINALPACKAGE=1
 
-      - name: Verify entitlements in built App
-        # 确认 OnyxApp 二进制里确实签入了 network.client（防 CI 漏签）
+      - name: Inject network/mapkit entitlements into OnyxApp
+        # theos 的 <app>_ENTITLEMENTS 在 CI 环境不生效，这里用 ldid 显式把 entitlements 签进 App 二进制。
+        # 解包 deb -> ldid 签名 -> 重包 deb（gzip 格式，dpkg 通用）。
         run: |
-          APP=$(find .theos -name OnyxApp -type f | head -1)
-          echo "built app: $APP"
-          ldid -e "$APP" 2>/dev/null | grep -c "network.client" || echo "0"
+          set -e
+          cd "$GITHUB_WORKSPACE"
+          DEB=$(ls packages/*.deb)
+          echo "source deb: $DEB"
+          WORK=/tmp/onyx_ent
+          rm -rf "$WORK" && mkdir -p "$WORK/payload"
+          cd "$WORK"
+          ar x "$GITHUB_WORKSPACE/$DEB"
+          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar -xf - -C payload; fi
+          if [ -f data.tar.gz ]; then tar -zxf data.tar.gz -C payload; fi
+          if [ -f data.tar.xz ]; then xz -dc data.tar.xz | tar -xf - -C payload; fi
+          APP=$(find payload -name OnyxApp -type f | head -1)
+          echo "signing: $APP"
+          ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
+          echo "--- 签名后的 entitlements ---"
+          ldid -e "$APP" | grep -E "network.client|mapkit|get-task-allow|personal-information.location" || true
+          tar -zcf data.tar.gz -C payload .
+          rm -f data.tar.lzma data.tar.xz
+          BASE=$(basename "$DEB")
+          rm -f "$GITHUB_WORKSPACE/packages/$BASE"
+          ar rcs "$GITHUB_WORKSPACE/packages/$BASE" debian-binary control.tar.gz data.tar.gz
+          echo "rebuilt deb: $BASE"
+
+      - name: Verify entitlements in repacked deb
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          DEB=$(ls packages/*.deb)
+          WORK=/tmp/onyx_verify
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          cd "$WORK"
+          ar x "$DEB"
+          if [ -f data.tar.gz ]; then tar -zxf data.tar.gz; fi
+          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar -xf -; fi
+          APP=$(find . -name OnyxApp -type f | head -1)
+          echo "verifying: $APP"
+          ldid -e "$APP" | grep -E "network.client|mapkit" && echo "ENTITLEMENTS_OK" || echo "ENTITLEMENTS_MISSING"
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
