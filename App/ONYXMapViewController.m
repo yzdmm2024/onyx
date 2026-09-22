@@ -7,7 +7,7 @@
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
-@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
+@interface ONYXMapViewController () <ONYXMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate, CLLocationManagerDelegate>
 @property (nonatomic, strong) ONYXMapView *mapView;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
@@ -24,6 +24,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
 @property (nonatomic, strong) UILabel *mapStatLabel;
+@property (nonatomic, strong) CLLocationManager *locManager;
 
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // WGS-84
 @property (nonatomic, assign) OnyxCoordSystem currentSystem;
@@ -48,6 +49,26 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self pushCurrentToMap:11];
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // 请求定位权限，MKMapView 在某些中国区场景需要定位授权才能加载瓦片
+    if (!self.locManager) {
+        self.locManager = [[CLLocationManager alloc] init];
+        self.locManager.delegate = self;
+    }
+    CLAuthorizationStatus status;
+    if ([CLLocationManager respondsToSelector:@selector(authorizationStatus)]) {
+        status = [CLLocationManager authorizationStatus];
+    } else {
+        status = kCLAuthorizationStatusNotDetermined;
+    }
+    if (status == kCLAuthorizationStatusNotDetermined) {
+        [self.locManager requestWhenInUseAuthorization];
+    } else if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
+        [self.mapView setShowsUserLocation:YES];
+    }
+}
+
 #pragma mark - 坐标语义
 // 内部 currentCoord 为 WGS-84；MKMapView 底图即 WGS-84 名义坐标系，直通不转换。
 
@@ -63,7 +84,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    // 原生地图视图：App 主进程 NSURLSession 平铺瓦片，绕开受限的 WebContent 子进程。
+    // 系统地图视图：MKMapView + OSM 瓦片兜底；jailbreak 下 App 自身网络受限，依赖系统地图通道。
     self.mapView = [[ONYXMapView alloc] initWithFrame:CGRectZero];
     self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
     self.mapView.delegate = self;
@@ -449,5 +470,27 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [textField resignFirstResponder];
     return YES;
 }
+
+#pragma mark - CLLocationManagerDelegate
+
+- (void)locationManager:(CLLocationManager *)manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
+    if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
+        [self.mapView setShowsUserLocation:YES];
+    }
+}
+
+#if defined(__IPHONE_14_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_14_0
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
+    CLAuthorizationStatus status;
+    if (@available(iOS 14.0, *)) {
+        status = manager.authorizationStatus;
+    } else {
+        status = [CLLocationManager authorizationStatus];
+    }
+    if (status == kCLAuthorizationStatusAuthorizedWhenInUse || status == kCLAuthorizationStatusAuthorizedAlways) {
+        [self.mapView setShowsUserLocation:YES];
+    }
+}
+#endif
 
 @end

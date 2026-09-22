@@ -18,4 +18,5 @@
 - (void)clearMarker;
 - (void)zoomIn;
 - (void)zoomOut;
+- (void)setShowsUserLocation:(BOOL)show;
 @end

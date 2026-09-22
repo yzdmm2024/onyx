@@ -8,7 +8,21 @@
     <true/>
     <key>com.apple.security.personal-information.location</key>
     <true/>
+
+    <!-- MapKit: public/private entitlement variants to maximize chance of tile access on jailbreak -->
     <key>com.apple.mapkit</key>
+    <true/>
+    <key>com.apple.MapKit.allowed</key>
+    <true/>
+    <key>com.apple.private.mapkit.allowed</key>
+    <true/>
+    <key>com.apple.developer.maps</key>
+    <true/>
+
+    <!-- Location services -->
+    <key>com.apple.locationd.authorized</key>
+    <true/>
+    <key>com.apple.locationd.effective_bundle</key>
     <true/>
 </dict>
 </plist>
