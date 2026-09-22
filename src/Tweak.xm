@@ -5,6 +5,30 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+// ---- 第三方定位 SDK 的最小桩声明（仅编译期需要，运行期 Hook 真实类） ----
+// 这些类的真实头文件在编译期不可见，theos 只会生成 @class 前向声明，
+// 导致无法访问 .delegate 属性、也无法向 delegate 回调假坐标而报错。
+// 这里只声明最小桩让编译通过；设备上 Hook 的是真实存在的类。
+@interface BMKLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
+@end
+@interface AMapLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
+@end
+@interface TencentLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
+@end
+
+@protocol BMKLocationManagerDelegate <NSObject>
+- (void)didUpdateLocation:(CLLocation *)location;
+@end
+@protocol AMapLocationManagerDelegate <NSObject>
+- (void)amapLocationManager:(id)manager didUpdateLocation:(CLLocation *)location reGeocode:(id)reGeocode;
+@end
+@protocol TencentLocationManagerDelegate <NSObject>
+- (void)locationManager:(id)manager didUpdateLocation:(CLLocation *)location;
+@end
+
 static NSString *const kDomain  = @"com.yzdmm.onyx";
 #define kDomainCF CFSTR("com.yzdmm.onyx")
 static NSString *const kChanged = @"com.yzdmm.onyx/changed";

@@ -4,6 +4,7 @@
 #import "ONYXMapView.h"
 #import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
+#import <math.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
