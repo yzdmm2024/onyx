@@ -78,7 +78,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     if (_active()) {
         // delegate 设好后立即推一次，确保冷启动时也能拿到假位置
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self _onyxFakePush];
+            [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
     }
 }
@@ -98,10 +98,10 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     if (_active()) {
         // 立即推（不延迟），多次推确保地图初始化后也被覆盖
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self _onyxFakePush];
+            [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self _onyxFakePush];
+            [self performSelector:@selector(_onyxFakePush) withObject:nil];
         });
     }
 }
