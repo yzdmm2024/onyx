@@ -37,7 +37,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.title = @"定位模拟";
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     self.currentSystem = OnyxCoordSystemWGS84;
-    self.currentCoord = CLLocationCoordinate2DMake(33.634652, 114.701222); // default shown in screenshot area
+    self.currentCoord = CLLocationCoordinate2DMake(31.230416, 121.473701); // 上海人民广场
     self.running = NO;
 
     [self setupNav];
@@ -48,6 +48,11 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self placePinAt:self.currentCoord animated:NO];
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self.mapView setRegion:MKCoordinateRegionMakeWithDistance(self.currentCoord, 1500, 1500) animated:YES];
+}
+
 - (void)setupNav {
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"应用" style:UIBarButtonItemStylePlain target:self action:@selector(openAppsList:)];
 }
@@ -55,7 +60,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 - (void)setupMap {
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.searchBar.placeholder = @"搜索地址";
+    self.searchBar.placeholder = @"搜索地址，或输入 纬度,经度";
     self.searchBar.delegate = self;
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
@@ -65,11 +70,16 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.mapView.delegate = self;
     self.mapView.mapType = MKMapTypeStandard;
     self.mapView.showsUserLocation = NO;
+    self.mapView.showsScale = YES;
+    self.mapView.showsCompass = YES;
+    self.mapView.zoomEnabled = YES;
+    self.mapView.scrollEnabled = YES;
     [self.view addSubview:self.mapView];
 
     UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(mapLongPressed:)];
     [self.mapView addGestureRecognizer:lp];
 
+    // 地图高度：取 safeArea 的一半，但至少 240，确保一定可见
     [NSLayoutConstraint activateConstraints:@[
         [self.searchBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [self.searchBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
@@ -79,7 +89,8 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         [self.mapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
         [self.mapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.mapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.mapView.heightAnchor constraintEqualToAnchor:self.view.heightAnchor multiplier:0.52]
+        [self.mapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
+        [self.mapView.heightAnchor constraintGreaterThanOrEqualToConstant:240]
     ]];
 }
 
@@ -154,8 +165,8 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
     self.quickField = [[UITextField alloc] init];
     self.quickField.borderStyle = UITextBorderStyleRoundedRect;
-    self.quickField.placeholder = @"输入地址或坐标";
-    self.quickField.returnKeyType = UIReturnKeyGo;
+    self.quickField.placeholder = @"输入地址 或 纬度,经度";
+    self.quickField.returnKeyType = UIReturnKeySearch;
     self.quickField.delegate = self;
     self.quickField.font = [UIFont systemFontOfSize:15];
     [stack addArrangedSubview:self.quickField];
@@ -261,7 +272,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     }
     self.pin.coordinate = coord;
     [self.mapView setCenterCoordinate:coord animated:animated];
-    MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 5000, 5000);
+    MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 1500, 1500);
     [self.mapView setRegion:region animated:animated];
 }
 
@@ -313,14 +324,14 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self presentViewController:nav animated:YES completion:nil];
 }
 
-#pragma mark - Search
+#pragma mark - Search（CLGeocoder 优先，MKLocalSearch 兜底，覆盖中国区）
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
     [searchBar resignFirstResponder];
     NSString *text = searchBar.text;
     if (!text.length) return;
 
-    // Try coordinate input first: "lat,lng" or "lat lng"
+    // 1) 先试坐标输入："lat,lng" 或 "lat lng"
     NSScanner *scanner = [NSScanner scannerWithString:text];
     double lat = 0, lng = 0;
     BOOL coordInput = [scanner scanDouble:&lat] && lat >= -90 && lat <= 90;
@@ -338,25 +349,44 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         }
     }
 
-    MKLocalSearchRequest *req = [[MKLocalSearchRequest alloc] init];
-    req.naturalLanguageQuery = text;
-    req.region = self.mapView.region;
-    MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:req];
-    [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (error || !response.mapItems.count) {
-                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"未找到" message:@"换关键词试试" preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:alert animated:YES completion:nil];
-                return;
+    self.addressLabel.text = @"正在搜索…";
+    // 2) CLGeocoder 正向地理编码（Apple，国内可搜县级以上/知名地点）
+    CLGeocoder *coder = [[CLGeocoder alloc] init];
+    [coder geocodeAddressString:text completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *error) {
+        if (placemarks.count) {
+            [self applyPlacemark:placemarks.firstObject name:text];
+            return;
+        }
+        // 3) 兜底 MKLocalSearch（周边/英文更稳）
+        MKLocalSearchRequest *req = [[MKLocalSearchRequest alloc] init];
+        req.naturalLanguageQuery = text;
+        // 用全国范围搜索，提升命中率
+        req.region = MKCoordinateRegionMakeWithDistance(CLLocationCoordinate2DMake(35.0, 105.0), 5000000, 5000000);
+        MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:req];
+        [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *err2) {
+            if (response.mapItems.count) {
+                MKMapItem *item = response.mapItems.firstObject;
+                self.currentCoord = item.placemark.coordinate;
+                [self updateLabels];
+                [self placePinAt:self.currentCoord animated:YES];
+                self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", item.name ?: text];
+            } else {
+                self.addressLabel.text = [NSString stringWithFormat:@"未找到「%@」，可改输 纬度,经度", text];
             }
-            MKMapItem *item = response.mapItems.firstObject;
-            self.currentCoord = item.placemark.coordinate;
-            [self updateLabels];
-            [self placePinAt:self.currentCoord animated:YES];
-            self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", item.name ?: @"未知地址"];
-        });
+        }];
     }];
+}
+
+- (void)applyPlacemark:(CLPlacemark *)p name:(NSString *)name {
+    self.currentCoord = p.location.coordinate;
+    [self updateLabels];
+    [self placePinAt:self.currentCoord animated:YES];
+    NSMutableArray *parts = [NSMutableArray array];
+    if (p.locality) [parts addObject:p.locality];
+    if (p.subLocality) [parts addObject:p.subLocality];
+    if (p.thoroughfare) [parts addObject:p.thoroughfare];
+    if (p.name) [parts addObject:p.name];
+    self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", parts.count ? [parts componentsJoinedByString:@" "] : name];
 }
 
 - (void)reverseGeocode:(CLLocationCoordinate2D)coord {
@@ -364,12 +394,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     CLLocation *loc = [[CLLocation alloc] initWithLatitude:coord.latitude longitude:coord.longitude];
     [coder reverseGeocodeLocation:loc completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *error) {
         if (placemarks.firstObject) {
-            CLPlacemark *p = placemarks.firstObject;
-            NSMutableArray *parts = [NSMutableArray array];
-            if (p.locality) [parts addObject:p.locality];
-            if (p.subLocality) [parts addObject:p.subLocality];
-            if (p.thoroughfare) [parts addObject:p.thoroughfare];
-            self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", parts.count ? [parts componentsJoinedByString:@" "] : [NSString stringWithFormat:@"%.4f, %.4f", coord.latitude, coord.longitude]];
+            [self applyPlacemark:placemarks.firstObject name:[NSString stringWithFormat:@"%.4f, %.4f", coord.latitude, coord.longitude]];
         }
     }];
 }
