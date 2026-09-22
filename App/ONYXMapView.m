@@ -4,7 +4,7 @@
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *detailLabel;
 @property (nonatomic, strong) UILabel *coordLabel;
-@property (nonatomic, strong) CLLocationCoordinate2D currentCoord;
+@property (nonatomic, assign) CLLocationCoordinate2D currentCoord;
 @property (nonatomic, assign) NSInteger zoom;
 @property (nonatomic, assign) BOOL showMarker;
 @end
