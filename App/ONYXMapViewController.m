@@ -1,13 +1,14 @@
 #import "ONYXMapViewController.h"
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
+#import <WebKit/WebKit.h>
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
 
-@interface ONYXMapViewController () <MKMapViewDelegate, UISearchBarDelegate, CLLocationManagerDelegate, UITextFieldDelegate>
-@property (nonatomic, strong) MKMapView *mapView;
+@interface ONYXMapViewController () <WKScriptMessageHandler, UISearchBarDelegate, UITextFieldDelegate>
+@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
 @property (nonatomic, strong) UIView *sheetContent;
@@ -23,8 +24,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
 
-@property (nonatomic, strong) MKPointAnnotation *pin;
-@property (nonatomic, strong) CLLocationManager *locManager;
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // WGS-84
 @property (nonatomic, assign) OnyxCoordSystem currentSystem;
 @property (nonatomic, assign) BOOL running;
@@ -45,12 +44,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self setupSheet];
     [self loadState];
     [self updateLabels];
-    [self placePinAt:self.currentCoord animated:NO];
-}
-
-- (void)viewDidAppear:(BOOL)animated {
-    [super viewDidAppear:animated];
-    [self.mapView setRegion:MKCoordinateRegionMakeWithDistance(self.currentCoord, 1500, 1500) animated:YES];
 }
 
 - (void)setupNav {
@@ -65,32 +58,36 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    self.mapView = [[MKMapView alloc] init];
-    self.mapView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.mapView.delegate = self;
-    self.mapView.mapType = MKMapTypeStandard;
-    self.mapView.showsUserLocation = NO;
-    self.mapView.showsScale = YES;
-    self.mapView.showsCompass = YES;
-    self.mapView.zoomEnabled = YES;
-    self.mapView.scrollEnabled = YES;
-    [self.view addSubview:self.mapView];
+    // 用 WKWebView + 高德栅格瓦片渲染地图。
+    // 原因：MKMapView 加载瓦片需要 com.apple.mapkit 授权，adhoc/TrollStore 签名的 App 没有，
+    // 瓦片请求会被拒（灰块）。网页地图只走普通 HTTPS 图片，无需该授权，自带中文标注。
+    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+    [cfg.userContentController addScriptMessageHandler:self name:@"onyx"];
+    self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
+    self.webView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.webView.scrollView.scrollEnabled = NO;
+    self.webView.backgroundColor = [UIColor colorWithRed:0.68 green:0.85 blue:1.0 alpha:1.0];
+    self.webView.opaque = NO;
+    [self.view addSubview:self.webView];
 
-    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(mapLongPressed:)];
-    [self.mapView addGestureRecognizer:lp];
+    NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"map" ofType:@"html"];
+    if (htmlPath) {
+        NSURL *url = [NSURL fileURLWithPath:htmlPath];
+        NSURL *dir = [NSURL fileURLWithPath:[[NSBundle mainBundle] resourcePath] isDirectory:YES];
+        [self.webView loadFileURL:url allowingReadAccessToURL:dir];
+    }
 
-    // 地图高度：取 safeArea 的一半，但至少 240，确保一定可见
     [NSLayoutConstraint activateConstraints:@[
         [self.searchBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [self.searchBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.searchBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.searchBar.heightAnchor constraintEqualToConstant:44],
 
-        [self.mapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
-        [self.mapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.mapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.mapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
-        [self.mapView.heightAnchor constraintGreaterThanOrEqualToConstant:240]
+        [self.webView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
+        [self.webView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.webView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.5],
+        [self.webView.heightAnchor constraintGreaterThanOrEqualToConstant:240]
     ]];
 }
 
@@ -105,7 +102,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self.sheet addSubview:self.sheetContent];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.sheet.topAnchor constraintEqualToAnchor:self.mapView.bottomAnchor],
+        [self.sheet.topAnchor constraintEqualToAnchor:self.webView.bottomAnchor],
         [self.sheet.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sheet.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -131,7 +128,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         [stack.bottomAnchor constraintEqualToAnchor:self.sheetContent.bottomAnchor]
     ]];
 
-    // coordinate labels
     UIView *coordRow = [[UIView alloc] init];
     coordRow.translatesAutoresizingMaskIntoConstraints = NO;
     self.latLabel = [self label:@"纬度" value:@"0.000000"];
@@ -150,13 +146,11 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     ]];
     [stack addArrangedSubview:coordRow];
 
-    // system selector
     self.systemControl = [[UISegmentedControl alloc] initWithItems:@[@"WGS-84", @"GCJ-02", @"BD-09"]];
     self.systemControl.selectedSegmentIndex = 0;
     [self.systemControl addTarget:self action:@selector(systemChanged:) forControlEvents:UIControlEventValueChanged];
     [stack addArrangedSubview:self.systemControl];
 
-    // quick locate
     UILabel *quickTitle = [[UILabel alloc] init];
     quickTitle.text = @"快速定位";
     quickTitle.textColor = [UIColor systemBlueColor];
@@ -171,11 +165,9 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.quickField.font = [UIFont systemFontOfSize:15];
     [stack addArrangedSubview:self.quickField];
 
-    // save button
     self.saveButton = [self buttonWithTitle:@"保存并应用" color:[UIColor systemBlueColor] action:@selector(saveTapped:)];
     [stack addArrangedSubview:self.saveButton];
 
-    // address / current
     self.addressLabel = [[UILabel alloc] init];
     self.addressLabel.numberOfLines = 0;
     self.addressLabel.text = @"当前：";
@@ -183,17 +175,14 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.addressLabel.textColor = [UIColor secondaryLabelColor];
     [stack addArrangedSubview:self.addressLabel];
 
-    // apply to here
     self.applyButton = [self buttonWithTitle:@"一键修改到此位置" color:[UIColor systemBlueColor] action:@selector(applyTapped:)];
     [stack addArrangedSubview:self.applyButton];
 
-    // status
     self.statusLabel = [[UILabel alloc] init];
     self.statusLabel.text = @"状态：已停止";
     self.statusLabel.font = [UIFont systemFontOfSize:14];
     [stack addArrangedSubview:self.statusLabel];
 
-    // start/stop row
     UIStackView *btnRow = [[UIStackView alloc] init];
     btnRow.axis = UILayoutConstraintAxisHorizontal;
     btnRow.distribution = UIStackViewDistributionFillEqually;
@@ -225,6 +214,35 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [b.heightAnchor constraintEqualToConstant:46].active = YES;
     [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return b;
+}
+
+#pragma mark - WKScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:@"onyx"]) return;
+    NSDictionary *d = message.body;
+    NSString *type = d[@"type"];
+    if ([type isEqualToString:@"ready"]) {
+        [self pushCurrentToMap:11];
+        return;
+    }
+    if ([type isEqualToString:@"tap"]) {
+        // JS 回传的是高德(GCJ-02)坐标，转回 WGS-84 存内部
+        double lng = [d[@"lng"] doubleValue];
+        double lat = [d[@"lat"] doubleValue];
+        CLLocationCoordinate2D gcj = CLLocationCoordinate2DMake(lat, lng);
+        CLLocationCoordinate2D wgs = [ONYXCoordTransform convert:gcj fromSystem:OnyxCoordSystemGCJ02 toSystem:OnyxCoordSystemWGS84];
+        self.currentCoord = wgs;
+        [self updateLabels];
+        [self reverseGeocode:wgs];
+    }
+}
+
+// 把内部 WGS-84 坐标推到网页地图（网页底图是高德 GCJ-02）
+- (void)pushCurrentToMap:(NSInteger)zoom {
+    CLLocationCoordinate2D gcj = [ONYXCoordTransform convert:self.currentCoord fromSystem:OnyxCoordSystemWGS84 toSystem:OnyxCoordSystemGCJ02];
+    NSString *js = [NSString stringWithFormat:@"onyxSet(%@,%@,%ld,true)", @(gcj.longitude), @(gcj.latitude), (long)zoom];
+    [self.webView evaluateJavaScript:js completionHandler:nil];
 }
 
 #pragma mark - State
@@ -265,15 +283,9 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.stopButton.alpha = self.running ? 1.0 : 0.5;
 }
 
-- (void)placePinAt:(CLLocationCoordinate2D)coord animated:(BOOL)animated {
-    if (!self.pin) {
-        self.pin = [[MKPointAnnotation alloc] init];
-        [self.mapView addAnnotation:self.pin];
-    }
-    self.pin.coordinate = coord;
-    [self.mapView setCenterCoordinate:coord animated:animated];
-    MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 1500, 1500);
-    [self.mapView setRegion:region animated:animated];
+- (void)placePinAt:(CLLocationCoordinate2D)coord {
+    self.currentCoord = coord;
+    [self pushCurrentToMap:14];
 }
 
 #pragma mark - Actions
@@ -281,16 +293,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 - (void)systemChanged:(UISegmentedControl *)sender {
     self.currentSystem = (OnyxCoordSystem)sender.selectedSegmentIndex;
     [self updateLabels];
-}
-
-- (void)mapLongPressed:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
-    CGPoint pt = [gesture locationInView:self.mapView];
-    CLLocationCoordinate2D coord = [self.mapView convertPoint:pt toCoordinateFromView:self.mapView];
-    self.currentCoord = coord; // WGS-84 from map (Apple Maps is WGS-84)
-    [self updateLabels];
-    [self placePinAt:coord animated:YES];
-    [self reverseGeocode:coord];
 }
 
 - (void)saveTapped:(UIButton *)sender {
@@ -343,7 +345,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
             self.systemControl.selectedSegmentIndex = 0;
             self.currentCoord = CLLocationCoordinate2DMake(lat, lng);
             [self updateLabels];
-            [self placePinAt:self.currentCoord animated:YES];
+            [self placePinAt:self.currentCoord];
             [self reverseGeocode:self.currentCoord];
             return;
         }
@@ -360,7 +362,6 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
         // 3) 兜底 MKLocalSearch（周边/英文更稳）
         MKLocalSearchRequest *req = [[MKLocalSearchRequest alloc] init];
         req.naturalLanguageQuery = text;
-        // 用全国范围搜索，提升命中率
         req.region = MKCoordinateRegionMakeWithDistance(CLLocationCoordinate2DMake(35.0, 105.0), 5000000, 5000000);
         MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:req];
         [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *err2) {
@@ -368,7 +369,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
                 MKMapItem *item = response.mapItems.firstObject;
                 self.currentCoord = item.placemark.coordinate;
                 [self updateLabels];
-                [self placePinAt:self.currentCoord animated:YES];
+                [self placePinAt:self.currentCoord];
                 self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", item.name ?: text];
             } else {
                 self.addressLabel.text = [NSString stringWithFormat:@"未找到「%@」，可改输 纬度,经度", text];
@@ -380,7 +381,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 - (void)applyPlacemark:(CLPlacemark *)p name:(NSString *)name {
     self.currentCoord = p.location.coordinate;
     [self updateLabels];
-    [self placePinAt:self.currentCoord animated:YES];
+    [self placePinAt:self.currentCoord];
     NSMutableArray *parts = [NSMutableArray array];
     if (p.locality) [parts addObject:p.locality];
     if (p.subLocality) [parts addObject:p.subLocality];
@@ -404,6 +405,10 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     [self searchBarSearchButtonClicked:self.searchBar];
     [textField resignFirstResponder];
     return YES;
+}
+
+- (void)dealloc {
+    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"onyx"];
 }
 
 @end
