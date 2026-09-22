@@ -191,7 +191,7 @@ static const NSInteger TILE = 256;
     if (gaode) [req setValue:@"https://www.amap.com/" forHTTPHeaderField:@"Referer"];
 
     NSURLSession *sess = [ONYXMapView sharedSession];
-    [sess dataTaskWithRequest:req
+    NSURLSessionDataTask *task = [sess dataTaskWithRequest:req
         completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         NSHTTPURLResponse *hr = (NSHTTPURLResponse *)resp;
         if (!err && hr.statusCode == 200 && data.length) {
@@ -223,6 +223,7 @@ static const NSInteger TILE = 256;
             }
         });
     }];
+    [task resume];
 }
 
 - (void)incrOk { _ok++; [self reportStats]; }
