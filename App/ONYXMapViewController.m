@@ -112,7 +112,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
         [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.amapView.leadingAnchor constant:10],
         [self.mapStatLabel.topAnchor constraintEqualToAnchor:self.amapView.topAnchor constant:10],
-        [self.mapStatLabel.widthAnchor constraintEqualToConstant:100],
+        [self.mapStatLabel.widthAnchor constraintEqualToConstant:220],
         [self.mapStatLabel.heightAnchor constraintEqualToConstant:22]
     ]];
 }

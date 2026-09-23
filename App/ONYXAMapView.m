@@ -5,6 +5,8 @@
 // 自绘瓦片地图（无 MKMapView）。
 // 布局：self 上先放 _tileLayer（瓦片画布），再放标记 _pin，最后放常驻坐标横幅 _coordLabel。
 // 坐标：对外 WGS-84；瓦片空间 GCJ-02（高德瓦片为 GCJ-02，故直接用 GCJ 计算瓦片行列）。
+// 0.3.6 修复：越狱 platform-app 下 NSURLSession 自定义 configuration 经常无法出站，
+// 改用 [NSURLSession sharedSession]，并支持 HTTPS->HTTP 自动降级。
 
 static const CGFloat kTile = 256.0;      // 每张瓦片边长(px)
 static const NSInteger kMinZoom = 3;
@@ -116,9 +118,10 @@ static UIImage *onyx_pinImage(void) {
     _tileViews = [NSMutableDictionary dictionary];
     _imgCache = [[NSCache alloc] init];
     _inflight = [NSMutableSet set];
-    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
-    cfg.timeoutIntervalForRequest = 20;
-    _session = [NSURLSession sessionWithConfiguration:cfg];
+    // 坑：越狱 platform-app/container-required=false 的 App，使用自定义
+    // NSURLSessionConfiguration 时可能无法建立出站连接（系统代理/ATS 被绕过）。
+    // [NSURLSession sharedSession] 走系统默认通道，反而更容易成功。
+    _session = [NSURLSession sharedSession];
 
     _tileLayer = [[UIView alloc] initWithFrame:self.bounds];
     _tileLayer.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -279,31 +282,53 @@ static UIImage *onyx_pinImage(void) {
 }
 
 - (void)loadTileForKey:(NSString *)key x:(int)x y:(int)y z:(NSInteger)z {
+    [self loadTileForKey:key x:x y:y z:z https:YES];
+}
+
+- (void)loadTileForKey:(NSString *)key x:(int)x y:(int)y z:(NSInteger)z https:(BOOL)https {
     [_inflight addObject:key];
     // 轮换子域 webrd01-04，分散连接
     long sub = (x + y + (long)z) % 4 + 1;
-    NSString *urlstr = [NSString stringWithFormat:@"https://webrd0%ld.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%d&y=%d&z=%ld",
-                        sub, x, y, (long)z];
-    NSURLRequest *req = [NSURLRequest requestWithURL:[NSURL URLWithString:urlstr]
-                                         cachePolicy:NSURLRequestUseProtocolCachePolicy
-                                     timeoutInterval:20];
+    NSString *scheme = https ? @"https" : @"http";
+    NSString *urlstr = [NSString stringWithFormat:@"%@://webrd0%ld.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%d&y=%d&z=%ld",
+                        scheme, sub, x, y, (long)z];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlstr]
+                                                       cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                                   timeoutInterval:20];
+    // 模拟 Safari UA，部分 CDN 会校验
+    [req setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            forHTTPHeaderField:@"User-Agent"];
+    NSLog(@"[OnyxTile] fetch %@", urlstr);
     __weak typeof(self) wself = self;
     NSURLSessionDataTask *task = [_session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
-        if (!data.length) {
+        NSHTTPURLResponse *http = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)resp : nil;
+        NSLog(@"[OnyxTile] response %@ status=%ld data=%lu error=%@", urlstr, (long)(http.statusCode), (unsigned long)data.length, error);
+        if (error || !data.length || (http && http.statusCode >= 400)) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(self) s = wself; if (!s) return;
                 [s->_inflight removeObject:key];
                 s->_tileFailCount++;
+                // HTTPS 失败时自动降级到 HTTP 再试一次
+                if (https && s->_tileFailCount <= 3) {
+                    NSLog(@"[OnyxTile] HTTPS failed, retry HTTP for %@", key);
+                    [s loadTileForKey:key x:x y:y z:z https:NO];
+                    return;
+                }
                 [s tileLoadFailed];
             });
             return;
         }
         UIImage *img = [UIImage imageWithData:data];
         if (!img) {
+            NSLog(@"[OnyxTile] not an image: %@, bytes=%lu", urlstr, (unsigned long)data.length);
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(self) s = wself; if (!s) return;
                 [s->_inflight removeObject:key];
                 s->_tileFailCount++;
+                if (https && s->_tileFailCount <= 3) {
+                    [s loadTileForKey:key x:x y:y z:z https:NO];
+                    return;
+                }
                 [s tileLoadFailed];
             });
             return;
