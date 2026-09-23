@@ -12,12 +12,13 @@
 static NSString *const kDomain = @"com.yzdmm.onyx";
 static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
-@interface ONYXMapViewController () <ONYXAMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
+@interface ONYXMapViewController () <ONYXAMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate, CLLocationManagerDelegate>
 @property (nonatomic, strong) ONYXAMapView *amapView;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
 @property (nonatomic, strong) UIView *sheetContent;
 
+@property (nonatomic, strong) CLLocationManager *realLocMgr; // 恢复时取一次真实位置
 @property (nonatomic, strong) UILabel *latLabel;
 @property (nonatomic, strong) UILabel *lngLabel;
 @property (nonatomic, strong) UITextField *quickField;
@@ -84,10 +85,15 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.sheetBottomInset.constant = -h; // 抬升 sheet 底部到键盘上方
     [UIView animateWithDuration:0.25 animations:^{
         [self.view layoutIfNeeded];
-        // 把正在输入的快速定位框滚到可见区域
+    } completion:^(BOOL finished) {
+        // 布局完成后滚动，避免动画中途坐标换算不准导致输入框仍被键盘遮挡
         if (self.quickField.isFirstResponder) {
             CGRect f = [self.quickField convertRect:self.quickField.bounds toView:self.sheet];
-            [self.sheet scrollRectToVisible:CGRectInset(f, 0, -20) animated:YES];
+            // 强制把输入框对齐到可视区顶部（上方留 8pt），保证完整显示输入文字
+            CGFloat topY = f.origin.y - 8;
+            if (topY > 0) {
+                [self.sheet setContentOffset:CGPointMake(0, topY) animated:YES];
+            }
         }
     }];
 }
@@ -471,11 +477,58 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.running = NO;
     [self saveState];
     [self updateStatus];
+    // 请求一次真实位置，把地图红色光标移回真实地址（看地图即知已恢复）
+    [self fetchRealLocation];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已恢复真实位置"
-                                                                   message:@"已停止模拟，所有 App 都回到真实定位。"
+                                                                   message:@"已停止模拟，所有 App 都回到真实定位。地图光标正在回到你的真实位置…"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+// 取一次真实位置并更新地图光标与坐标显示
+- (void)fetchRealLocation {
+    if (!self.realLocMgr) {
+        self.realLocMgr = [[CLLocationManager alloc] init];
+        self.realLocMgr.delegate = self;
+        self.realLocMgr.desiredAccuracy = kCLLocationAccuracyBest;
+    }
+    CLAuthorizationStatus st = [CLLocationManager authorizationStatus];
+    if (st == kCLAuthorizationStatusNotDetermined) {
+        [self.realLocMgr requestWhenInUseAuthorization];
+        return; // 授权回调后再取
+    }
+    if (st == kCLAuthorizationStatusDenied || st == kCLAuthorizationStatusRestricted) {
+        // 无定位权限：提示用户去设置开启
+        self.mapStatLabel.text = @"地图：无法获取真实位置（未授权定位）";
+        return;
+    }
+    [self.realLocMgr requestLocation];
+}
+
+- (void)locationManager:(CLLocationManager *)manager didUpdateLocations:(NSArray<CLLocation *> *)locations {
+    CLLocation *loc = locations.lastObject;
+    if (!loc) return;
+    CLLocationCoordinate2D real = loc.coordinate;
+    // 光标回到真实位置（内部仍为 WGS-84）
+    self.currentCoord = real;
+    [self updateLabels];
+    [self placePinAt:real];
+    [self reverseGeocode:real];
+}
+
+- (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error {
+    NSLog(@"[Onyx] 获取真实位置失败: %@", error);
+}
+
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
+    // 首次授权后自动取一次真实位置
+    CLAuthorizationStatus st = [CLLocationManager authorizationStatus];
+    if (st != kCLAuthorizationStatusNotDetermined &&
+        st != kCLAuthorizationStatusDenied &&
+        st != kCLAuthorizationStatusRestricted) {
+        [manager requestLocation];
+    }
 }
 
 - (void)openAppsList:(id)sender {
