@@ -5,4 +5,14 @@ packages/
 *.o
 *.d
 .ci_artifacts/
-.ci_artifacts/
+artifacts/
+artifacts2/
+*.deb
+# 本地辅助脚本/构建产物（不提交）
+*.deb
+push_files.py
+bump_version.py
+edit_*.py
+fix_*.py
+gen_packages_new.py
+push_repo.py

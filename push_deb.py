@@ -104,13 +104,18 @@ def main():
     stanzas = split_stanzas(pkgs)
     print("   当前 stanza 数:", len(stanzas))
 
-    kept = [s for s in stanzas if ("Package: %s" % PKG_ID) not in s]
-    print("   删除旧 %s 条目后剩余: %d" % (PKG_ID, len(kept)))
+    # 多架构：只替换同 Package + 同 Architecture 的旧条目，保留其他架构条目
+    def _arch(stanza):
+        m = re.search(r"(?m)^Architecture:\\s*(.+)$", stanza)
+        return m.group(1).strip() if m else ""
+    NEW_ARCH = _arch(ce)
+    kept = [s for s in stanzas if not (("Package: %s" % PKG_ID) in s and _arch(s) == NEW_ARCH)]
+    print("   删除旧 %s (%s) 条目后剩余: %d" % (PKG_ID, NEW_ARCH, len(kept)))
     kept.append(ce.rstrip("\n"))
     new_pkgs = "\n\n".join(kept) + "\n"
 
     rs = split_stanzas(new_pkgs)
-    t = [s for s in rs if PKG_ID in s and ("Version: %s" % NEW_VERSION) in s]
+    t = [s for s in rs if PKG_ID in s and ("Version: %s" % NEW_VERSION) in s and _arch(s) == NEW_ARCH]
     print("===== %s 条目 =====" % NEW_VERSION)
     print(t[0] if t else "!! 缺失")
     have = bool(t) and all(k in t[0] for k in ("Filename:", "Size:", "MD5sum:", "SHA1:", "SHA256:"))
@@ -137,7 +142,7 @@ def main():
         "Suite: stable\n"
         "Codename: stable\n"
         "Version: 1.0\n"
-        "Architectures: iphoneos-arm64\n"
+        "Architectures: iphoneos-arm64 iphoneos-arm64e\n"
         "Components: main\n"
         "Description: Ac`ljcr 越狱插件源（定位模拟等）\n"
         "Date: %s\n" % now
@@ -164,7 +169,8 @@ def main():
         listing = json.loads(gh("repositories/%s/contents/debs?ref=main" % _repo_id()))
         for ent in listing:
             n = ent.get("name", "")
-            if n.startswith(PKG_ID + "_") and n != deb_name:
+            # 同包同架构的旧版本才删，避免多架构互相清理
+            if n.startswith(PKG_ID + "_") and ("_%s_" % NEW_ARCH) in n and n != deb_name:
                 old_debs.append("debs/" + n)
     except Exception as e:
         print("   [warn] 列 debs/ 目录失败，跳过清理:", e)
