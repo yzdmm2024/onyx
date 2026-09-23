@@ -20,15 +20,20 @@ jobs:
       - name: Install dependencies (theos + tools)
         run: |
           brew install make dpkg ldid gpatch libplist || true
-          # 安装 theos（官方 action 太慢，直接用 beerpiss 的精简安装）
-          git clone --recursive https://github.com/theos/theos.git "$HOME/theos" || true
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          echo "PATH=$THEOS/bin:$PATH" >> "$GITHUB_ENV"
+          sudo mkdir -p /opt/theos
+          sudo chown $(whoami) /opt/theos
+          git clone --recursive https://github.com/theos/theos.git /opt/theos
+          # 14.5 SDK（Makefile TARGET 要求），sparse 拉取避免整库
+          rm -rf /opt/theos/sdks
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /opt/theos/sdks
+          cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
+          echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
+          echo "PATH=/opt/theos/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Build dual-arch debs
         run: |
           set -e
-          export THEOS="$HOME/theos"
+          export THEOS=/opt/theos
           export PATH="$THEOS/bin:$PATH"
           make clean >/dev/null 2>&1 || true
           # 1) 一次 fat 构建（arm64+arm64e）→ iphoneos-arm64.deb（rootless/Dopamine，fat 二进制）
