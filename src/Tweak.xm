@@ -39,47 +39,80 @@ static BOOL s_hasCoord = NO;
 static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_selectedApps = nil;
 
+// 直接读取 plist 文件，绕过 cfprefsd 在 rootless / RootHide（relaxin）下可能出现的
+// 「写入进程能写、但注入到目标 App 的 Tweak 读不到」的跨进程隔离问题。
+// 优先尝试 rootless 路径，再回退标准路径；都失败才退回 CFPreferences。
+static NSDictionary *_onyxLoadPlist(void) {
+    NSArray<NSString *> *cands = @[
+        @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
+        @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
+    ];
+    for (NSString *p in cands) {
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (d) return d;
+    }
+    return nil;
+}
+
+static CFAbsoluteTime s_lastRead = 0;
 static void _readPrefs(void) {
-    // 越狱跨进程关键：
-    // 1) 读取前先 Synchronize，刷新磁盘上的 plist；
-    // 2) 用 CFPreferencesCopyValue + CurrentUser/AnyHost 明确指定全局用户偏好，
-    //    避免 iOS container 隔离导致 Tweak 在目标 App 进程里读到空值。
+    NSDictionary *d = _onyxLoadPlist();
+    if (d) {
+        s_enabled = [d[@"enabled"] boolValue];
+        NSNumber *la = d[@"Latitude"], *ln = d[@"Longitude"];
+        s_hasCoord = (la && ln);
+        if (s_hasCoord) { s_lat = [la doubleValue]; s_lng = [ln doubleValue]; }
+        NSArray *sel = d[@"SelectedApps"];
+        s_selectedApps = [sel isKindOfClass:[NSArray class]] ? [NSSet setWithArray:sel] : nil;
+        return;
+    }
+    // 兜底：仍用 CFPreferences（理论与实测都极少走到这里）
     CFPreferencesAppSynchronize(kDomainCF);
     CFPropertyListRef e = CFPreferencesCopyValue(CFSTR("enabled"), kDomainCF,
                                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     s_enabled = e ? [(__bridge NSNumber *)e boolValue] : NO;
     if (e) CFRelease(e);
-
     CFPropertyListRef la = CFPreferencesCopyValue(CFSTR("Latitude"), kDomainCF,
                                                    kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     CFPropertyListRef ln = CFPreferencesCopyValue(CFSTR("Longitude"), kDomainCF,
                                                    kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     s_hasCoord = (la && ln);
-    if (s_hasCoord) {
-        s_lat = [(__bridge NSNumber *)la doubleValue];
-        s_lng = [(__bridge NSNumber *)ln doubleValue];
-    }
+    if (s_hasCoord) { s_lat = [(__bridge NSNumber *)la doubleValue]; s_lng = [(__bridge NSNumber *)ln doubleValue]; }
     if (la) CFRelease(la);
     if (ln) CFRelease(ln);
-
     CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), kDomainCF,
                                                     kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    if (arr) {
-        s_selectedApps = [NSSet setWithArray:(__bridge NSArray *)arr];
-        CFRelease(arr);
-    } else {
-        s_selectedApps = nil;
-    }
+    if (arr) { s_selectedApps = [NSSet setWithArray:(__bridge NSArray *)arr]; CFRelease(arr); }
+    else { s_selectedApps = nil; }
 }
 
+// 限制磁盘读取频率（每秒最多一次），避免热点方法里频繁读文件；
+// 同时让 Tweak 在 App 改了配置后能自愈（无需依赖 Darwin 通知一定送达）。
+static void _readPrefsThrottled(void) {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - s_lastRead > 1.0) { _readPrefs(); s_lastRead = now; }
+}
+
+static BOOL s_logNoEnabled = NO, s_logEmpty = NO, s_logMismatch = NO;
 static BOOL _active(void) {
-    _readPrefs();
-    if (!s_enabled || !s_hasCoord) return NO;
+    _readPrefsThrottled();
+    if (!s_enabled || !s_hasCoord) {
+        if (!s_logNoEnabled) { NSLog(@"[Onyx] _active=NO (enabled=%d hasCoord=%d) bid=%@",
+                                     s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier); s_logNoEnabled = YES; }
+        return NO;
+    }
     NSString *bid = NSBundle.mainBundle.bundleIdentifier;
     if (!bid.length) return NO;
-    // 必须有明确选择；空列表 = 不注入任何 App（系统级模拟由 App 的 CLSimulationManager 负责）
-    if (!s_selectedApps || s_selectedApps.count == 0) return NO;
-    if (![s_selectedApps containsObject:bid]) return NO;
+    // 必须有明确选择；空列表 = 不注入任何 App
+    if (!s_selectedApps || s_selectedApps.count == 0) {
+        if (!s_logEmpty) { NSLog(@"[Onyx] _active=NO selected EMPTY bid=%@", bid); s_logEmpty = YES; }
+        return NO;
+    }
+    if (![s_selectedApps containsObject:bid]) {
+        if (!s_logMismatch) { NSLog(@"[Onyx] _active=NO bid=%@ NOT in selected=%@",
+                                    bid, s_selectedApps.allObjects); s_logMismatch = YES; }
+        return NO;
+    }
     return YES;
 }
 
