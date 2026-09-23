@@ -1,8 +1,8 @@
 #import <UIKit/UIKit.h>
-#import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
 
-// MKMapView + 高德瓦片叠加封装：iOS 无法直连苹果瓦片时仍能出图。
+// 自绘瓦片地图：用 NSURLSession 直连高德公开瓦片（webrdXX.is.autonavi.com/appmaptile），
+// 完全脱离 MKMapView —— 苹果 MapKit 后端被屏蔽时依旧能出图、缩放、拖动。
 // 地图空间按 GCJ-02，对外接口统一 WGS-84（与面板/模拟一致），内部自动互转。
 @class ONYXAMapView;
 
@@ -15,7 +15,6 @@
 
 @interface ONYXAMapView : UIView
 @property (nonatomic, weak) id<ONYXAMapViewDelegate> delegate;
-@property (nonatomic, readonly) MKMapView *mapView;
 
 - (void)setCenterCoordinate:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom showMarker:(BOOL)showMarker;
 - (void)setMarkerCoordinate:(CLLocationCoordinate2D)coord;
