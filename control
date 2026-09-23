@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.3
+Version: 0.5.4
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.3 修复：选中应用未立即生效（改为实时读取配置、配置变更即主动推送假坐标）、快速定位输入框被键盘遮挡看不到文字；历史记录底部新增「记忆功能」开关（关闭=每次进入停止模拟，开启=自动恢复上次定位）。v0.5.2 起按 App 生效：仅「应用列表」勾选的 App 收假坐标，未勾选保持真实定位；App 内「恢复」按钮一键回到真实位置。独立面板：自绘瓦片地图选点、搜索、历史记录、应用列表、运行中应用管理。支持 iOS 15-17：arm64（Dopamine/palera1n）+ arm64e（relaxin/RootHide）。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.5.4 修复：选中应用未立即生效（改为实时读取配置、配置变更即主动推送假坐标）、快速定位输入框被键盘遮挡看不到文字；历史记录底部新增「记忆功能」开关（关闭=每次进入停止模拟，开启=自动恢复上次定位）。v0.5.2 起按 App 生效：仅「应用列表」勾选的 App 收假坐标，未勾选保持真实定位；App 内「恢复」按钮一键回到真实位置。独立面板：自绘瓦片地图选点、搜索、历史记录、应用列表、运行中应用管理。支持 iOS 15-17：arm64（Dopamine/palera1n）+ arm64e（relaxin/RootHide）。rootless 适配，A12+。

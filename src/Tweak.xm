@@ -40,6 +40,9 @@ static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_selectedApps = nil;
 
 static void _readPrefs(void) {
+    // 越狱跨进程关键：读取前先 Synchronize，否则目标 App 进程缓存旧值，
+    // 导致 enabled/坐标/SelectedApps 一直读不到 Onyx App 写入的新配置。
+    CFPreferencesAppSynchronize(kDomainCF);
     CFPropertyListRef e = CFPreferencesCopyAppValue(CFSTR("enabled"), kDomainCF);
     s_enabled = e ? [(__bridge NSNumber *)e boolValue] : NO;
     if (e) CFRelease(e);
