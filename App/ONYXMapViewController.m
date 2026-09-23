@@ -42,15 +42,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [super viewWillAppear:animated];
     [self loadRecent]; // 历史页删除/备注后返回，刷新最近快捷
     [self refreshStatusPanel];
-    // 若运行中但已无任何已选应用（左滑全清除），自动停止
-    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
-    NSInteger cnt = 0;
-    if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
-    if (self.running && cnt == 0) {
-        self.running = NO;
-        [[ONYXLocationSimulator sharedSimulator] stopSimulation];
-        [self updateStatus];
-    }
 }
 
 - (void)viewDidLoad {
@@ -77,11 +68,15 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
                                                                 style:UIBarButtonItemStylePlain
                                                                target:self
                                                                action:@selector(refreshMapAction:)];
+    UIBarButtonItem *restore = [[UIBarButtonItem alloc] initWithTitle:@"恢复"
+                                                              style:UIBarButtonItemStylePlain
+                                                             target:self
+                                                             action:@selector(restoreTapped:)];
     UIBarButtonItem *apps = [[UIBarButtonItem alloc] initWithTitle:@"应用"
                                                              style:UIBarButtonItemStylePlain
                                                             target:self
                                                             action:@selector(openAppsList:)];
-    self.navigationItem.rightBarButtonItems = @[apps, refresh];
+    self.navigationItem.rightBarButtonItems = @[apps, restore, refresh];
 }
 
 // 手动刷新地图瓦片（网络变化如刚开 VPN 后，无需杀掉 App 重开）
@@ -199,24 +194,17 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     coordRow.translatesAutoresizingMaskIntoConstraints = NO;
     self.latLabel = [self label:@"纬度" value:@"0.000000"];
     self.lngLabel = [self label:@"经度" value:@"0.000000"];
-    UILabel *sysL = [self label:@"坐标系统" value:@"WGS-84"];
-    sysL.textColor = [UIColor systemBlueColor];
     [coordRow addSubview:self.latLabel];
     [coordRow addSubview:self.lngLabel];
-    [coordRow addSubview:sysL];
     [NSLayoutConstraint activateConstraints:@[
         [self.latLabel.leadingAnchor constraintEqualToAnchor:coordRow.leadingAnchor],
         [self.latLabel.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
         [self.latLabel.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor],
-        [self.latLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.38],
+        [self.latLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.5 constant:-3],
         [self.lngLabel.leadingAnchor constraintEqualToAnchor:self.latLabel.trailingAnchor constant:6],
+        [self.lngLabel.trailingAnchor constraintEqualToAnchor:coordRow.trailingAnchor],
         [self.lngLabel.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
-        [self.lngLabel.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor],
-        [self.lngLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.38],
-        [sysL.leadingAnchor constraintEqualToAnchor:self.lngLabel.trailingAnchor constant:6],
-        [sysL.trailingAnchor constraintEqualToAnchor:coordRow.trailingAnchor],
-        [sysL.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
-        [sysL.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor]
+        [self.lngLabel.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor]
     ]];
     [stack addArrangedSubview:coordRow];
 
@@ -346,9 +334,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     if (lat) CFRelease(lat);
     if (lng) CFRelease(lng);
     if (en) CFRelease(en);
-    if (self.running) {
-        [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
-    }
     [self updateStatus];
     [self loadRecent];
 }
@@ -401,12 +386,8 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 - (void)saveTapped:(UIButton *)sender {
     self.running = YES;
     [self saveState];
-    BOOL ok = [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
     [self updateStatus];
-    NSString *msg = ok
-        ? @"系统级定位模拟已开启。所有使用系统定位的 App（包括百度/高德/微信等）都会收到此坐标。"
-        : [NSString stringWithFormat:@"保存成功，但系统级定位模拟启动失败：%@。可能是 entitlement 未生效或 iOS 版本不支持。", [ONYXLocationSimulator sharedSimulator].lastError ?: @"未知错误"];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:@"已启用。勾选的 App 会收到此坐标，未勾选的 App 保持真实位置。" preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -414,22 +395,32 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 - (void)applyTapped:(UIButton *)sender {
     self.running = YES;
     [self saveState];
-    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
     [self updateStatus];
 }
 
 - (void)startTapped:(UIButton *)sender {
     self.running = YES;
     [self saveState];
-    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude longitude:self.currentCoord.longitude];
     [self updateStatus];
 }
 
 - (void)stopTapped:(UIButton *)sender {
     self.running = NO;
     [self saveState];
-    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
     [self updateStatus];
+}
+
+- (void)restoreTapped:(id)sender {
+    // 先清掉 locationd 里可能残留的系统级模拟状态（兼容旧版升级上来的情况）
+    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
+    self.running = NO;
+    [self saveState];
+    [self updateStatus];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已恢复真实位置"
+                                                                   message:@"已停止模拟，所有 App 都回到真实定位。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)openAppsList:(id)sender {
@@ -452,7 +443,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
         if (cnt == 0) {
             s.running = NO;
-            [[ONYXLocationSimulator sharedSimulator] stopSimulation];
+            [s saveState];
             [s updateStatus];
         }
     };
