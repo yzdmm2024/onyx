@@ -134,7 +134,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 
 %hook CLLocationManager
 - (instancetype)init {
-    instancetype m = %orig;
+    CLLocationManager *m = %orig;
     if (m && s_mgrs) [s_mgrs addObject:m];
     return m;
 }
