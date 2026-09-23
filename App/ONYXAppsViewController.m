@@ -180,7 +180,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.filteredApps = self.apps;
 
     // 关键修复：和 saveSelected 一样从 CFPreferences 读，而不是 NSUserDefaults
-    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     if (arr) {
         self.selected = [NSMutableSet setWithArray:(__bridge NSArray *)arr];
         CFRelease(arr);
@@ -229,8 +229,9 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 - (void)saveSelected {
-    CFPreferencesSetAppValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected allObjects], CFSTR("com.yzdmm.onyx"));
-    CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPreferencesSetValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected allObjects], domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
 }
 

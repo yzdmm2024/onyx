@@ -40,15 +40,20 @@ static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_selectedApps = nil;
 
 static void _readPrefs(void) {
-    // 越狱跨进程关键：读取前先 Synchronize，否则目标 App 进程缓存旧值，
-    // 导致 enabled/坐标/SelectedApps 一直读不到 Onyx App 写入的新配置。
+    // 越狱跨进程关键：
+    // 1) 读取前先 Synchronize，刷新磁盘上的 plist；
+    // 2) 用 CFPreferencesCopyValue + CurrentUser/AnyHost 明确指定全局用户偏好，
+    //    避免 iOS container 隔离导致 Tweak 在目标 App 进程里读到空值。
     CFPreferencesAppSynchronize(kDomainCF);
-    CFPropertyListRef e = CFPreferencesCopyAppValue(CFSTR("enabled"), kDomainCF);
+    CFPropertyListRef e = CFPreferencesCopyValue(CFSTR("enabled"), kDomainCF,
+                                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     s_enabled = e ? [(__bridge NSNumber *)e boolValue] : NO;
     if (e) CFRelease(e);
 
-    CFPropertyListRef la = CFPreferencesCopyAppValue(CFSTR("Latitude"), kDomainCF);
-    CFPropertyListRef ln = CFPreferencesCopyAppValue(CFSTR("Longitude"), kDomainCF);
+    CFPropertyListRef la = CFPreferencesCopyValue(CFSTR("Latitude"), kDomainCF,
+                                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPropertyListRef ln = CFPreferencesCopyValue(CFSTR("Longitude"), kDomainCF,
+                                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     s_hasCoord = (la && ln);
     if (s_hasCoord) {
         s_lat = [(__bridge NSNumber *)la doubleValue];
@@ -57,7 +62,8 @@ static void _readPrefs(void) {
     if (la) CFRelease(la);
     if (ln) CFRelease(ln);
 
-    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), kDomainCF);
+    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), kDomainCF,
+                                                    kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     if (arr) {
         s_selectedApps = [NSSet setWithArray:(__bridge NSArray *)arr];
         CFRelease(arr);

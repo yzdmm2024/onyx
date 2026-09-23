@@ -92,7 +92,7 @@
 
 - (void)loadSelected {
     NSArray *all = [self.class allApplications];
-    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     NSArray *bids = nil;
     if (arr) {
         bids = (__bridge NSArray *)arr;
@@ -157,8 +157,9 @@
     NSString *bid = self.selected[index];
     [self.selected removeObjectAtIndex:index];
 
-    CFPreferencesSetAppValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected copy], CFSTR("com.yzdmm.onyx"));
-    CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPreferencesSetValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected copy], domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
 
     if (self.onRemove) self.onRemove();

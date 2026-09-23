@@ -45,7 +45,8 @@ static NSString *const kHistoryRecentKey = @"com.yzdmm.onyx.recentCoords";
     UISwitch *sw = [[UISwitch alloc] init];
     sw.translatesAutoresizingMaskIntoConstraints = NO;
     sw.onTintColor = [UIColor systemBlueColor]; // 开启为蓝色，关闭为灰色
-    CFPropertyListRef mem = CFPreferencesCopyAppValue(CFSTR("MemoryEnabled"), CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPropertyListRef mem = CFPreferencesCopyValue(CFSTR("MemoryEnabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     sw.on = mem ? [(__bridge NSNumber *)mem boolValue] : YES;
     if (mem) CFRelease(mem);
     [sw addTarget:self action:@selector(memorySwitchChanged:) forControlEvents:UIControlEventValueChanged];
@@ -65,14 +66,15 @@ static NSString *const kHistoryRecentKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)memorySwitchChanged:(UISwitch *)sw {
-    CFPreferencesSetAppValue(CFSTR("MemoryEnabled"), (__bridge CFNumberRef)@(sw.on), CFSTR("com.yzdmm.onyx"));
-    CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPreferencesSetValue(CFSTR("MemoryEnabled"), (__bridge CFNumberRef)@(sw.on), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     // 立即应用：开启=恢复上次模拟状态；关闭=停止模拟（下次进入也停）
-    CFPropertyListRef en = CFPreferencesCopyAppValue(CFSTR("enabled"), CFSTR("com.yzdmm.onyx"));
+    CFPropertyListRef en = CFPreferencesCopyValue(CFSTR("enabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     BOOL running = sw.on && en ? [(__bridge NSNumber *)en boolValue] : NO;
     if (en) CFRelease(en);
-    CFPreferencesSetAppValue(CFSTR("enabled"), (__bridge CFNumberRef)@(running), CFSTR("com.yzdmm.onyx"));
-    CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
+    CFPreferencesSetValue(CFSTR("enabled"), (__bridge CFNumberRef)@(running), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     // 让 Tweak（各 App 进程）立即生效
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);

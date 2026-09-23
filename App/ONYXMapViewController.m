@@ -356,10 +356,11 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 #pragma mark - State
 
 - (void)loadState {
-    CFPropertyListRef lat = CFPreferencesCopyAppValue(CFSTR("Latitude"), CFSTR("com.yzdmm.onyx"));
-    CFPropertyListRef lng = CFPreferencesCopyAppValue(CFSTR("Longitude"), CFSTR("com.yzdmm.onyx"));
-    CFPropertyListRef en = CFPreferencesCopyAppValue(CFSTR("enabled"), CFSTR("com.yzdmm.onyx"));
-    CFPropertyListRef mem = CFPreferencesCopyAppValue(CFSTR("MemoryEnabled"), CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPropertyListRef lat = CFPreferencesCopyValue(CFSTR("Latitude"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPropertyListRef lng = CFPreferencesCopyValue(CFSTR("Longitude"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPropertyListRef en = CFPreferencesCopyValue(CFSTR("enabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPropertyListRef mem = CFPreferencesCopyValue(CFSTR("MemoryEnabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     BOOL memory = mem ? [(__bridge NSNumber *)mem boolValue] : YES; // 默认开启记忆
     if (lat && lng) {
         double la = [(__bridge NSNumber *)lat doubleValue];
@@ -377,10 +378,11 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)saveState {
-    CFPreferencesSetAppValue(CFSTR("Latitude"), (__bridge CFNumberRef)@(self.currentCoord.latitude), CFSTR("com.yzdmm.onyx"));
-    CFPreferencesSetAppValue(CFSTR("Longitude"), (__bridge CFNumberRef)@(self.currentCoord.longitude), CFSTR("com.yzdmm.onyx"));
-    CFPreferencesSetAppValue(CFSTR("enabled"), (__bridge CFNumberRef)@(self.running), CFSTR("com.yzdmm.onyx"));
-    CFPreferencesAppSynchronize(CFSTR("com.yzdmm.onyx"));
+    CFStringRef domain = CFSTR("com.yzdmm.onyx");
+    CFPreferencesSetValue(CFSTR("Latitude"), (__bridge CFNumberRef)@(self.currentCoord.latitude), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSetValue(CFSTR("Longitude"), (__bridge CFNumberRef)@(self.currentCoord.longitude), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSetValue(CFSTR("enabled"), (__bridge CFNumberRef)@(self.running), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
     [self saveRecent];
 }
@@ -399,7 +401,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)refreshStatusPanel {
-    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     NSInteger count = 0;
     if (arr) {
         count = [(__bridge NSArray *)arr count];
@@ -476,7 +478,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         if (!s) return;
         [s refreshStatusPanel];
         // 若已全部移除，自动停止模拟
-        CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+        CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
         NSInteger cnt = 0;
         if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
         if (cnt == 0) {
