@@ -291,36 +291,36 @@ static UIImage *onyx_pinImage(void) {
     NSURLSessionDataTask *task = [_session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         if (!data.length) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (!wself) return;
-                [wself->_inflight removeObject:key];
-                wself->_tileFailCount++;
-                [wself tileLoadFailed];
+                __strong typeof(self) s = wself; if (!s) return;
+                [s->_inflight removeObject:key];
+                s->_tileFailCount++;
+                [s tileLoadFailed];
             });
             return;
         }
         UIImage *img = [UIImage imageWithData:data];
         if (!img) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (!wself) return;
-                [wself->_inflight removeObject:key];
-                wself->_tileFailCount++;
-                [wself tileLoadFailed];
+                __strong typeof(self) s = wself; if (!s) return;
+                [s->_inflight removeObject:key];
+                s->_tileFailCount++;
+                [s tileLoadFailed];
             });
             return;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!wself) return;
-            [wself->_inflight removeObject:key];
-            [wself->_imgCache setObject:img forKey:key];
-            wself->_tileOkCount++;
-            UIImageView *iv = wself->_tileViews[key];
+            __strong typeof(self) s = wself; if (!s) return;
+            [s->_inflight removeObject:key];
+            [s->_imgCache setObject:img forKey:key];
+            s->_tileOkCount++;
+            UIImageView *iv = s->_tileViews[key];
             if (iv) iv.image = img;
-            if (wself->_tileOkCount == 1) {
-                if ([wself.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-                    [wself.delegate amapView:wself didUpdateStatus:@"瓦片已加载"];
+            if (s->_tileOkCount == 1) {
+                if ([s.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+                    [s.delegate amapView:s didUpdateStatus:@"瓦片已加载"];
                 }
             }
-            [wself updateCoordLabel];
+            [s updateCoordLabel];
         });
     }];
     [task resume];
