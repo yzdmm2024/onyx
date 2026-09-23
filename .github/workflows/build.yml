@@ -1,5 +1,6 @@
-# ============ Onyx CI：rootless 构建出 deb ============
+# ============ Onyx CI：rootless 双架构出包 deb ============
 # 公开仓库 macos-latest 走免费 macOS 额度；theos + Apple ld64 出正确绑定
+# arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）各自出 deb
 name: Build Onyx
 
 on:
@@ -30,41 +31,62 @@ jobs:
           make clean 2>/dev/null || true
           make package FINALPACKAGE=1
 
-      - name: Inject network/mapkit entitlements into OnyxApp
-        # theos 的 <app>_ENTITLEMENTS 在 CI 环境不生效，这里用 ldid 显式把 entitlements 签进 App 二进制。
+      - name: List built debs
+        run: |
+          echo "--- packages/ ---"
+          ls -la packages/ 2>/dev/null || echo "(no packages/ dir)"
+          echo "--- .theos/debs/ ---"
+          ls -la .theos/debs/ 2>/dev/null || echo "(no .theos/debs dir)"
+          # 多架构时把各架构 deb 收集到 packages/（若 theos 没自动放）
+          mkdir -p packages
+          cp .theos/debs/*.deb packages/ 2>/dev/null || true
+          ls -la packages/
+
+      - name: Inject network/mapkit entitlements into OnyxApp (loop over deb)
+        # 每个架构 deb 都要重签名 App 二进制的 entitlements（network.client / mapkit 等）。
         # 用 dpkg-deb 解包/重包（标准 deb 工具，正确处理 GNU 长名格式）。
         run: |
           set -e
           brew install dpkg 2>/dev/null || true
           cd "$GITHUB_WORKSPACE"
-          DEB=$(ls packages/*.deb)
-          echo "source deb: $DEB"
           WORK=/tmp/onyx_ent
-          rm -rf "$WORK" && mkdir -p "$WORK/root"
-          dpkg-deb -x "$DEB" "$WORK/root"
-          dpkg-deb -e "$DEB" "$WORK/root/DEBIAN"
-          APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
-          echo "signing: $APP"
-          ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
-          echo "--- 签名后的 entitlements ---"
-          ldid -e "$APP" | grep -E "network.client|mapkit|get-task-allow|personal-information.location" || true
-          BASE=$(basename "$DEB")
-          rm -f "$GITHUB_WORKSPACE/packages/$BASE"
-          dpkg-deb -b "$WORK/root" "$GITHUB_WORKSPACE/packages/$BASE"
-          echo "rebuilt deb: $BASE"
+          for DEB in packages/*.deb; do
+            echo "=== processing: $DEB ==="
+            rm -rf "$WORK" && mkdir -p "$WORK/root"
+            dpkg-deb -x "$DEB" "$WORK/root"
+            dpkg-deb -e "$DEB" "$WORK/root/DEBIAN"
+            APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
+            echo "signing: $APP"
+            if [ -f "$APP" ]; then
+              ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
+            else
+              echo "  (App binary not found at $APP, skipping sign)"; continue
+            fi
+            echo "--- 签名后的 entitlements ---"
+            ldid -e "$APP" | grep -E "network.client|mapkit|get-task-allow|personal-information.location" || true
+            BASE=$(basename "$DEB")
+            rm -f "$GITHUB_WORKSPACE/packages/$BASE"
+            dpkg-deb -b "$WORK/root" "$GITHUB_WORKSPACE/packages/$BASE"
+            echo "rebuilt deb: $BASE"
+          done
 
-      - name: Verify entitlements in repacked deb
+      - name: Verify entitlements in repacked debs
         run: |
           cd "$GITHUB_WORKSPACE"
-          DEB=$(ls packages/*.deb)
           WORK=/tmp/onyx_verify
-          rm -rf "$WORK" && mkdir -p "$WORK/root"
-          dpkg-deb -x "$DEB" "$WORK/root"
-          APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
-          echo "verifying: $APP"
-          ldid -e "$APP" | grep -E "network.client|mapkit" && echo "ENTITLEMENTS_OK" || echo "ENTITLEMENTS_MISSING"
+          for DEB in packages/*.deb; do
+            echo "=== verifying: $DEB ==="
+            rm -rf "$WORK" && mkdir -p "$WORK/root"
+            dpkg-deb -x "$DEB" "$WORK/root"
+            APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
+            if [ -f "$APP" ]; then
+              ldid -e "$APP" | grep -E "network.client|mapkit" && echo "ENTITLEMENTS_OK" || echo "ENTITLEMENTS_MISSING"
+            else
+              echo "  (no OnyxApp binary — tweak-only deb)"
+            fi
+          done
 
-      - name: Upload deb artifact
+      - name: Upload deb artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Onyx

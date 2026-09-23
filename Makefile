@@ -1,10 +1,11 @@
 # ============ Onyx Makefile：rootless tweak + 独立 App 配置面板 ============
 # 来源：键盘下方状态 v1.0.3 模板（CI 绿 + 真机面板可加载）
-# 适配：iOS16.0+（16.6 / 17.3 均测），Relaxin rootless
+# 适配：iOS 15-17，双架构，rootless（arm64 无根 / arm64e 隐根）
 
 # 坑G：SDK 14.5（新 Xcode SDK 无私有框架 tbd，链不了 Preferences）
 TARGET := iphone:clang:14.5:14.0
-# 坑F：arm64e 设备「设置」进程跑 arm64e，纯 arm64 的 bundle 加载报「已损坏」
+# 坑F：arm64e 设备「设置」进程跑 arm64e，纯 arm64 的 bundle 加载报「已损坏」；
+#      arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）双出包
 ARCHS = arm64 arm64e
 THEOS_PACKAGE_SCHEME = rootless
 INSTALL_TARGET_PROCESSES = SpringBoard
