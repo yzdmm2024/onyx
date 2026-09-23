@@ -177,8 +177,19 @@ static UIImage *onyx_pinImage(void) {
     pinch.delegate = self;
     [self addGestureRecognizer:pinch];
 
+    UITapGestureRecognizer *dbl = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap:)];
+    dbl.numberOfTapsRequired = 2;
+    dbl.delegate = self;
+    [self addGestureRecognizer:dbl];
+
+    UILongPressGestureRecognizer *longp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    longp.minimumPressDuration = 0.5;
+    longp.delegate = self;
+    [self addGestureRecognizer:longp];
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     tap.delegate = self;
+    [tap requireGestureRecognizerToFail:dbl]; // 明确单击才选点，双击用于缩放
     [self addGestureRecognizer:tap];
 }
 
@@ -305,6 +316,24 @@ static UIImage *onyx_pinImage(void) {
 
 - (void)handleTap:(UITapGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateEnded) return;
+    CGPoint p = [g locationInView:self];
+    CLLocationCoordinate2D disp = onyx_worldToLonlat(CGPointMake(_origin.x + p.x, _origin.y + p.y), _zoom);
+    _centerWGS = [self wgsFromDisplay:disp];
+    _hasCenter = YES;
+    [self refreshPin];
+    [self updateCoordLabel];
+    if ([self.delegate respondsToSelector:@selector(amapView:didPickCoordinate:)]) {
+        [self.delegate amapView:self didPickCoordinate:_centerWGS];
+    }
+}
+
+- (void)handleDoubleTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    [self zoomIn];
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
     CGPoint p = [g locationInView:self];
     CLLocationCoordinate2D disp = onyx_worldToLonlat(CGPointMake(_origin.x + p.x, _origin.y + p.y), _zoom);
     _centerWGS = [self wgsFromDisplay:disp];

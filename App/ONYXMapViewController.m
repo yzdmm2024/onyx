@@ -1,7 +1,6 @@
 #import "ONYXMapViewController.h"
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
-#import "ONYXMapView.h"
 #import "ONYXAMapView.h"
 #import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
@@ -10,16 +9,14 @@
 static NSString *const kDomain = @"com.yzdmm.onyx";
 static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
-@interface ONYXMapViewController () <ONYXMapViewDelegate, ONYXAMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
+@interface ONYXMapViewController () <ONYXAMapViewDelegate, UISearchBarDelegate, UITextFieldDelegate>
 @property (nonatomic, strong) ONYXAMapView *amapView;
-@property (nonatomic, strong) ONYXMapView *statusCard;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UIScrollView *sheet;
 @property (nonatomic, strong) UIView *sheetContent;
 
 @property (nonatomic, strong) UILabel *latLabel;
 @property (nonatomic, strong) UILabel *lngLabel;
-@property (nonatomic, strong) UISegmentedControl *systemControl;
 @property (nonatomic, strong) UITextField *quickField;
 @property (nonatomic, strong) UIButton *saveButton;
 @property (nonatomic, strong) UILabel *addressLabel;
@@ -27,11 +24,11 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
+@property (nonatomic, strong) UILabel *statusBar;
 @property (nonatomic, strong) UILabel *mapStatLabel;
 @property (nonatomic, strong) UISegmentedControl *recentControl;
 
-@property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // WGS-84
-@property (nonatomic, assign) OnyxCoordSystem currentSystem;
+@property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // 恒为 WGS-84（与 CGCS2000 数值一致）
 @property (nonatomic, assign) BOOL running;
 @end
 
@@ -41,7 +38,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [super viewDidLoad];
     self.title = @"定位模拟";
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-    self.currentSystem = OnyxCoordSystemWGS84;
     self.currentCoord = CLLocationCoordinate2DMake(31.230416, 121.473701); // 上海人民广场
     self.running = NO;
 
@@ -75,11 +71,17 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.amapView.delegate = self;
     [self.view addSubview:self.amapView];
 
-    // 状态卡片（保持原有"定位模拟状态"面板，放到地图下方）
-    self.statusCard = [[ONYXMapView alloc] initWithFrame:CGRectZero];
-    self.statusCard.translatesAutoresizingMaskIntoConstraints = NO;
-    self.statusCard.delegate = self;
-    [self.view addSubview:self.statusCard];
+    // 紧凑状态栏（替换原来占 190pt 的"定位模拟状态"大卡片，省出空间给地图）
+    self.statusBar = [[UILabel alloc] init];
+    self.statusBar.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusBar.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    self.statusBar.textColor = [UIColor secondaryLabelColor];
+    self.statusBar.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.statusBar.layer.cornerRadius = 8;
+    self.statusBar.clipsToBounds = YES;
+    self.statusBar.textAlignment = NSTextAlignmentCenter;
+    self.statusBar.text = @"未启用";
+    [self.view addSubview:self.statusBar];
 
     // 地图状态标签
     self.mapStatLabel = [[UILabel alloc] init];
@@ -102,13 +104,13 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         [self.amapView.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
         [self.amapView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.amapView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.amapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.38],
-        [self.amapView.heightAnchor constraintGreaterThanOrEqualToConstant:180],
+        [self.amapView.heightAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.heightAnchor multiplier:0.45],
+        [self.amapView.heightAnchor constraintGreaterThanOrEqualToConstant:220],
 
-        [self.statusCard.topAnchor constraintEqualToAnchor:self.amapView.bottomAnchor],
-        [self.statusCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.statusCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.statusCard.heightAnchor constraintEqualToConstant:190],
+        [self.statusBar.topAnchor constraintEqualToAnchor:self.amapView.bottomAnchor constant:6],
+        [self.statusBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12],
+        [self.statusBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12],
+        [self.statusBar.heightAnchor constraintEqualToConstant:30],
 
         [self.mapStatLabel.leadingAnchor constraintEqualToAnchor:self.amapView.leadingAnchor constant:10],
         [self.mapStatLabel.topAnchor constraintEqualToAnchor:self.amapView.topAnchor constant:10],
@@ -131,7 +133,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self.sheet addSubview:self.sheetContent];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.sheet.topAnchor constraintEqualToAnchor:self.statusCard.bottomAnchor],
+        [self.sheet.topAnchor constraintEqualToAnchor:self.statusBar.bottomAnchor constant:6],
         [self.sheet.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sheet.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -146,7 +148,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     UIStackView *stack = [[UIStackView alloc] init];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 12;
+    stack.spacing = 10;
     stack.layoutMargins = UIEdgeInsetsMake(16, 16, 24, 16);
     stack.layoutMarginsRelativeArrangement = YES;
     [self.sheetContent addSubview:stack];
@@ -175,10 +177,17 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     ]];
     [stack addArrangedSubview:coordRow];
 
-    self.systemControl = [[UISegmentedControl alloc] initWithItems:@[@"WGS-84", @"GCJ-02", @"BD-09"]];
-    self.systemControl.selectedSegmentIndex = 0;
-    [self.systemControl addTarget:self action:@selector(systemChanged:) forControlEvents:UIControlEventValueChanged];
-    [stack addArrangedSubview:self.systemControl];
+    UILabel *systemNote = [[UILabel alloc] init];
+    systemNote.text = @"坐标系统：CGCS2000（大地2000）";
+    systemNote.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    systemNote.textColor = [UIColor systemBlueColor];
+    [stack addArrangedSubview:systemNote];
+
+    UILabel *gestureHint = [[UILabel alloc] init];
+    gestureHint.text = @"地图：双指缩放 · 双击放大 · 长按选点";
+    gestureHint.font = [UIFont systemFontOfSize:12];
+    gestureHint.textColor = [UIColor tertiaryLabelColor];
+    [stack addArrangedSubview:gestureHint];
 
     UILabel *quickTitle = [[UILabel alloc] init];
     quickTitle.text = @"快速定位";
@@ -320,9 +329,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)updateLabels {
-    CLLocationCoordinate2D display = [ONYXCoordTransform convert:self.currentCoord fromSystem:OnyxCoordSystemWGS84 toSystem:self.currentSystem];
-    self.latLabel.text = [NSString stringWithFormat:@"纬度  %.6f", display.latitude];
-    self.lngLabel.text = [NSString stringWithFormat:@"经度  %.6f", display.longitude];
+    // 恒为 CGCS2000（数值与 WGS-84 一致），不再做坐标系统切换
+    self.latLabel.text = [NSString stringWithFormat:@"纬度  %.6f", self.currentCoord.latitude];
+    self.lngLabel.text = [NSString stringWithFormat:@"经度  %.6f", self.currentCoord.longitude];
 }
 
 - (void)updateStatus {
@@ -342,9 +351,8 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     fmt.dateFormat = @"HH:mm:ss";
     NSString *time = [fmt stringFromDate:[NSDate date]];
-    [self.statusCard setStatusRunning:self.running selectedCount:count lastUpdated:time];
-    self.mapStatLabel.text = self.running
-        ? [NSString stringWithFormat:@"已启用 · %ld App", (long)count]
+    self.statusBar.text = self.running
+        ? [NSString stringWithFormat:@"运行中 · %ld App · %@", (long)count, time]
         : @"未启用";
 }
 
@@ -355,11 +363,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 #pragma mark - Actions
-
-- (void)systemChanged:(UISegmentedControl *)sender {
-    self.currentSystem = (OnyxCoordSystem)sender.selectedSegmentIndex;
-    [self updateLabels];
-}
 
 - (void)saveTapped:(UIButton *)sender {
     self.running = YES;
@@ -416,8 +419,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         [scanner scanCharactersFromSet:[NSCharacterSet characterSetWithCharactersInString:@", "] intoString:nil];
         coordInput = [scanner scanDouble:&lng] && lng >= -180 && lng <= 180;
         if (coordInput) {
-            self.currentSystem = OnyxCoordSystemWGS84;
-            self.systemControl.selectedSegmentIndex = 0;
             self.currentCoord = CLLocationCoordinate2DMake(lat, lng);
             [self updateLabels];
             [self placePinAt:self.currentCoord];
@@ -521,8 +522,6 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         NSDictionary *d = recents[idx - 1];
         double la = [d[@"lat"] doubleValue];
         double ln = [d[@"lng"] doubleValue];
-        self.currentSystem = OnyxCoordSystemWGS84;
-        self.systemControl.selectedSegmentIndex = 0;
         self.currentCoord = CLLocationCoordinate2DMake(la, ln);
         [self updateLabels];
         [self placePinAt:self.currentCoord];

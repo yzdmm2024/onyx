@@ -108,7 +108,8 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     // 多尝试几个 variant/options，不同 iOS 版本/系统应用/用户应用接口不同
     NSData *data = nil;
     struct { int variant; int options; } combos[] = {
-        {2, 0}, {0, 0}, {8, 0}, {2, 1}, {0, 1}, {8, 1},
+        {2, 0}, {0, 0}, {1, 0}, {4, 0}, {6, 0}, {7, 0}, {8, 0},
+        {2, 1}, {0, 1}, {6, 1}, {7, 1}, {8, 1},
     };
     for (NSUInteger i = 0; i < sizeof(combos)/sizeof(combos[0]); i++) {
         if ([proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:withOptions:")]) {
