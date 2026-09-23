@@ -5,5 +5,4 @@ Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Architecture: iphoneos-arm64
 Description: 想去哪里就去哪里。系统级定位模拟：向 locationd 注入坐标，全局影响所有使用系统定位的 App；并对百度/高德/腾讯/系统定位 SDK 回调假坐标，无需信任证书。独立 App 面板：自绘瓦片地图（高德优先、失败自动回退 OSM，多源回退+一键刷新）选点、搜索、历史记录（地名+坐标、左滑删除/备注、点击跳转）、应用列表、运行中应用管理、上次定位记忆。支持 iOS 15-17：arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）。rootless 适配，A12+。
