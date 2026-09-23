@@ -4,15 +4,25 @@
 
 // 自绘瓦片地图（无 MKMapView）。
 // 布局：self 上先放 _tileLayer（瓦片画布），再放标记 _pin，最后放常驻坐标横幅 _coordLabel。
-// 坐标：对外 WGS-84；瓦片空间 GCJ-02（高德瓦片为 GCJ-02，故直接用 GCJ 计算瓦片行列）。
+// 坐标：对外统一 WGS-84；瓦片投影随源而定——高德(GCJ-02) / OSM(Web Mercator WGS-84)。
 // 0.3.6 修复：越狱 platform-app 下 NSURLSession 自定义 configuration 经常无法出站，
 // 改用 [NSURLSession sharedSession]，并支持 HTTPS->HTTP 自动降级。
+// 0.3.8 新增：瓦片多源自动回退（高德 webrd -> 高德 webst -> OSM），
+// 直连连通性各环境不同，失败达到阈值自动切源，不开 VPN 也能出图。
 
 static const CGFloat kTile = 256.0;      // 每张瓦片边长(px)
 static const NSInteger kMinZoom = 3;
 static const NSInteger kMaxZoom = 18;
 
-#pragma mark - 墨卡托工具（GCJ-02）
+typedef NS_ENUM(NSInteger, OnyxTileProj) {
+    OnyxTileProjGCJ = 0,   // 高德：经纬度带偏移，需 GCJ-02
+    OnyxTileProjWGS = 1    // OSM：标准 Web Mercator (WGS-84)
+};
+
+static const NSInteger kSourceCount = 3;   // 0=高德webrd, 1=高德webst, 2=OSM
+static const NSInteger kFailThreshold = 3; // 连续失败张数达到此值才切源，避免抖动
+
+#pragma mark - 墨卡托工具（输入即目标系经纬度）
 
 static double onyx_worldSize(NSInteger zoom) { return kTile * pow(2.0, zoom); }
 
@@ -22,7 +32,7 @@ static double onyx_clampLat(double lat) {
     return lat;
 }
 
-// 经纬度(GCJ-02) -> 世界像素坐标（双击受 zoom 影响的整数像素）
+// 经纬度 -> 世界像素坐标（标准 Web Mercator，zoom 影响精度）
 static CGPoint onyx_lonlatToWorld(CLLocationCoordinate2D c, NSInteger zoom) {
     double ws = onyx_worldSize(zoom);
     double lat = onyx_clampLat(c.latitude);
@@ -32,7 +42,7 @@ static CGPoint onyx_lonlatToWorld(CLLocationCoordinate2D c, NSInteger zoom) {
     return CGPointMake(x, y);
 }
 
-// 世界像素坐标(zoom) -> 经纬度(GCJ-02)
+// 世界像素坐标 -> 经纬度（反解）
 static CLLocationCoordinate2D onyx_worldToLonlat(CGPoint p, NSInteger zoom) {
     double ws = onyx_worldSize(zoom);
     double lon = p.x / ws * 360.0 - 180.0;
@@ -75,13 +85,16 @@ static UIImage *onyx_pinImage(void) {
 @property (nonatomic, strong) NSURLSession *session;
 
 @property (nonatomic, assign) NSInteger zoom;
-@property (nonatomic, assign) CGPoint origin;                    // 世界像素坐标(自左上角)
+@property (nonatomic, assign) CGPoint origin;                    // 世界像素坐标(自左上角)，坐标系随源
 @property (nonatomic, assign) BOOL originValid;
-@property (nonatomic, assign) CLLocationCoordinate2D centerGCJ;  // 当前显示中心(GCJ-02)
+@property (nonatomic, assign) CLLocationCoordinate2D centerWGS;  // 当前显示中心（对外 WGS-84，不随源改变）
 @property (nonatomic, assign) BOOL showMarker;
 @property (nonatomic, assign) BOOL hasCenter;
+@property (nonatomic, assign) NSInteger srcIndex;                // 当前源 0..kSourceCount-1
+@property (nonatomic, assign) BOOL wgsTiles;                     // 当前源是否 WGS 投影(OSM)
 @property (nonatomic, assign) NSInteger tileOkCount;
 @property (nonatomic, assign) NSUInteger tileFailCount;
+@property (nonatomic, assign) NSUInteger consecFail;             // 连续失败张数
 @property (nonatomic, assign) BOOL reportedFail;
 @property (nonatomic, strong) NSError *lastError;
 
@@ -112,8 +125,11 @@ static UIImage *onyx_pinImage(void) {
     _originValid = NO;
     _showMarker = YES;
     _hasCenter = NO;
+    _srcIndex = 0;
+    _wgsTiles = NO;
     _tileOkCount = 0;
     _tileFailCount = 0;
+    _consecFail = 0;
     _reportedFail = NO;
 
     _tileViews = [NSMutableDictionary dictionary];
@@ -178,6 +194,75 @@ static UIImage *onyx_pinImage(void) {
     [self refreshPin];
 }
 
+#pragma mark - 源与投影
+
+- (void)applySourceIndex:(NSInteger)idx animated:(BOOL)animated {
+    BOOL newWgs = (idx == 2);
+    _srcIndex = idx;
+    if (_wgsTiles != newWgs) {
+        _wgsTiles = newWgs;
+        // 投影变化：保持屏幕中心为同一真实地点，重算世界坐标
+        CGPoint c = CGPointMake(self.bounds.size.width * 0.5, self.bounds.size.height * 0.5);
+        CLLocationCoordinate2D disp = [self displayCenter];
+        CGPoint wp = onyx_lonlatToWorld(disp, _zoom);
+        _origin = CGPointMake(wp.x - c.x, wp.y - c.y);
+    }
+    _reportedFail = NO;
+    [self resetTiles];
+}
+
+// 清空所有瓦片状态并重载（切源/投影时调用）
+- (void)resetTiles {
+    NSArray *keys = [_tileViews allKeys];
+    for (NSString *key in keys) {
+        [_tileViews[key] removeFromSuperview];
+    }
+    [_tileViews removeAllObjects];
+    [_imgCache removeAllObjects];
+    [_inflight removeAllObjects];
+    _consecFail = 0;
+    [self updateVisibleTiles];
+    [self updateCoordLabel];
+}
+
+// 当前源投影下，显示中心的经纬度（真实地点 _centerWGS 映射到当前系）
+- (CLLocationCoordinate2D)displayCenter {
+    if (_wgsTiles) return _centerWGS;
+    return [ONYXCoordTransform gcj02FromWgs84:_centerWGS];
+}
+
+// 把当前投影下读到的经纬度转回 WGS-84（对外）
+- (CLLocationCoordinate2D)wgsFromDisplay:(CLLocationCoordinate2D)d {
+    if (_wgsTiles) return d;
+    return [ONYXCoordTransform wgs84FromGcj02:d];
+}
+
+- (NSString *)tileURLForX:(int)x y:(int)y z:(NSInteger)zoom https:(BOOL)https {
+    NSString *scheme = https ? @"https" : @"http";
+    long sub = (x + y + (long)zoom) % 4 + 1;
+    switch (_srcIndex) {
+        case 1:
+            return [NSString stringWithFormat:@"%@://webst0%ld.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%d&y=%d&z=%ld",
+                    scheme, sub, x, y, (long)zoom];
+        case 2:
+            // OSM 只支持 https
+            return [NSString stringWithFormat:@"https://tile.openstreetmap.org/%ld/%d/%d.png",
+                    (long)zoom, x, y];
+        case 0:
+        default:
+            return [NSString stringWithFormat:@"%@://webrd0%ld.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%d&y=%d&z=%ld",
+                    scheme, sub, x, y, (long)zoom];
+    }
+}
+
+- (NSString *)sourceName {
+    switch (_srcIndex) {
+        case 1: return @"高德webst";
+        case 2: return @"OSM";
+        default: return @"高德webrd";
+    }
+}
+
 #pragma mark - 手势
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {
@@ -190,7 +275,8 @@ static UIImage *onyx_pinImage(void) {
         g.state == UIGestureRecognizerStateCancelled ||
         g.state == UIGestureRecognizerStateFailed) {
         CGPoint c = CGPointMake(self.bounds.size.width * 0.5, self.bounds.size.height * 0.5);
-        _centerGCJ = onyx_worldToLonlat(CGPointMake(_origin.x + c.x, _origin.y + c.y), _zoom);
+        CLLocationCoordinate2D disp = onyx_worldToLonlat(CGPointMake(_origin.x + c.x, _origin.y + c.y), _zoom);
+        _centerWGS = [self wgsFromDisplay:disp];
     }
     [self updateVisibleTiles];
     [self refreshPin];
@@ -220,13 +306,13 @@ static UIImage *onyx_pinImage(void) {
 - (void)handleTap:(UITapGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateEnded) return;
     CGPoint p = [g locationInView:self];
-    CLLocationCoordinate2D gcj = onyx_worldToLonlat(CGPointMake(_origin.x + p.x, _origin.y + p.y), _zoom);
-    _centerGCJ = gcj;
+    CLLocationCoordinate2D disp = onyx_worldToLonlat(CGPointMake(_origin.x + p.x, _origin.y + p.y), _zoom);
+    _centerWGS = [self wgsFromDisplay:disp];
     _hasCenter = YES;
     [self refreshPin];
     [self updateCoordLabel];
     if ([self.delegate respondsToSelector:@selector(amapView:didPickCoordinate:)]) {
-        [self.delegate amapView:self didPickCoordinate:[ONYXCoordTransform wgs84FromGcj02:gcj]];
+        [self.delegate amapView:self didPickCoordinate:_centerWGS];
     }
 }
 
@@ -283,69 +369,69 @@ static UIImage *onyx_pinImage(void) {
 }
 
 - (void)loadTileForKey:(NSString *)key x:(int)x y:(int)y z:(NSInteger)z {
-    [self loadTileForKey:key x:x y:y z:z https:YES];
+    // 高德(0/1)源支持 https 先试、失败降级 http
+    [self loadTileForKey:key x:x y:y z:z https:(_srcIndex < 2)];
 }
 
 - (void)loadTileForKey:(NSString *)key x:(int)x y:(int)y z:(NSInteger)z https:(BOOL)https {
     [_inflight addObject:key];
-    // 轮换子域 webrd01-04，分散连接
-    long sub = (x + y + (long)z) % 4 + 1;
-    NSString *scheme = https ? @"https" : @"http";
-    NSString *urlstr = [NSString stringWithFormat:@"%@://webrd0%ld.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%d&y=%d&z=%ld",
-                        scheme, sub, x, y, (long)z];
+    NSString *urlstr = [self tileURLForX:x y:y z:z https:https];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlstr]
                                                        cachePolicy:NSURLRequestUseProtocolCachePolicy
-                                                   timeoutInterval:20];
+                                                   timeoutInterval:15];
     // 模拟 Safari UA，部分 CDN 会校验
     [req setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
             forHTTPHeaderField:@"User-Agent"];
     NSLog(@"[OnyxTile] fetch %@", urlstr);
     __weak typeof(self) wself = self;
     NSURLSessionDataTask *task = [_session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+        __strong typeof(self) s = wself;
+        if (!s) return;
         NSHTTPURLResponse *http = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)resp : nil;
-        NSLog(@"[OnyxTile] response %@ status=%ld data=%lu error=%@", urlstr, (long)(http.statusCode), (unsigned long)data.length, error);
+        NSLog(@"[OnyxTile] resp %@ status=%ld data=%lu err=%@", urlstr, (long)(http.statusCode), (unsigned long)data.length, error);
         if (error || !data.length || (http && http.statusCode >= 400)) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong typeof(self) s = wself; if (!s) return;
+                if (![s->_inflight containsObject:key]) return; // 已切源，忽略
                 [s->_inflight removeObject:key];
                 s->_tileFailCount++;
-                // HTTPS 失败时自动降级到 HTTP 再试一次
-                if (https && s->_tileFailCount <= 3) {
-                    NSLog(@"[OnyxTile] HTTPS failed, retry HTTP for %@", key);
+                s->_lastError = error;
+                // 高德源 https 失败先降级 http
+                if (https && s->_srcIndex < 2) {
                     [s loadTileForKey:key x:x y:y z:z https:NO];
                     return;
                 }
-                s->_lastError = error;
-                [s tileLoadFailed];
+                [s handleTileFail];
             });
             return;
         }
         UIImage *img = [UIImage imageWithData:data];
         if (!img) {
-            NSLog(@"[OnyxTile] not an image: %@, bytes=%lu", urlstr, (unsigned long)data.length);
+            NSLog(@"[OnyxTile] not image: %@ bytes=%lu", urlstr, (unsigned long)data.length);
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong typeof(self) s = wself; if (!s) return;
+                if (![s->_inflight containsObject:key]) return;
                 [s->_inflight removeObject:key];
                 s->_tileFailCount++;
-                if (https && s->_tileFailCount <= 3) {
+                s->_lastError = [NSError errorWithDomain:@"OnyxTile" code:-2
+                                                userInfo:@{NSLocalizedDescriptionKey: @"服务器返回非图片数据"}];
+                if (https && s->_srcIndex < 2) {
                     [s loadTileForKey:key x:x y:y z:z https:NO];
                     return;
                 }
-                s->_lastError = [NSError errorWithDomain:@"OnyxTile" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"服务器返回非图片数据"}];
-                [s tileLoadFailed];
+                [s handleTileFail];
             });
             return;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(self) s = wself; if (!s) return;
+            if (![s->_inflight containsObject:key]) return; // 已切源，忽略旧请求
             [s->_inflight removeObject:key];
+            s->_consecFail = 0;
             [s->_imgCache setObject:img forKey:key];
             s->_tileOkCount++;
             UIImageView *iv = s->_tileViews[key];
             if (iv) iv.image = img;
             if (s->_tileOkCount == 1) {
                 if ([s.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-                    [s.delegate amapView:s didUpdateStatus:@"瓦片已加载"];
+                    [s.delegate amapView:s didUpdateStatus:[NSString stringWithFormat:@"瓦片已加载(%@)", [s sourceName]]];
                 }
             }
             [s updateCoordLabel];
@@ -354,19 +440,29 @@ static UIImage *onyx_pinImage(void) {
     [task resume];
 }
 
-- (void)tileLoadFailed {
-    if (_reportedFail) return;
-    _reportedFail = YES;
-    NSString *msg;
-    if (_lastError) {
-        msg = [NSString stringWithFormat:@"瓦片加载失败 %@(%ld)", _lastError.domain, (long)_lastError.code];
-    } else if (_tileOkCount > 0) {
-        msg = @"部分瓦片加载失败";
-    } else {
-        msg = @"瓦片加载失败(无网络?)";
+- (void)handleTileFail {
+    _consecFail++;
+    if (_consecFail >= kFailThreshold && _srcIndex < kSourceCount - 1) {
+        NSInteger next = _srcIndex + 1;
+        [self applySourceIndex:next animated:YES];
+        if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+            [self.delegate amapView:self didUpdateStatus:[NSString stringWithFormat:@"源切换 → %@", [self sourceName]]];
+        }
+        return;
     }
-    if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-        [self.delegate amapView:self didUpdateStatus:msg];
+    if (!_reportedFail) {
+        _reportedFail = YES;
+        NSString *msg;
+        if (_lastError) {
+            msg = [NSString stringWithFormat:@"%@瓦片加载失败 %@(%ld)", [self sourceName], _lastError.domain, (long)_lastError.code];
+        } else if (_tileOkCount > 0) {
+            msg = [NSString stringWithFormat:@"%@部分瓦片加载失败", [self sourceName]];
+        } else {
+            msg = [NSString stringWithFormat:@"%@瓦片加载失败(无网络?)", [self sourceName]];
+        }
+        if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+            [self.delegate amapView:self didUpdateStatus:msg];
+        }
     }
 }
 
@@ -377,7 +473,7 @@ static UIImage *onyx_pinImage(void) {
         _pin.hidden = YES;
         return;
     }
-    CGPoint wp = onyx_lonlatToWorld(_centerGCJ, _zoom);
+    CGPoint wp = onyx_lonlatToWorld([self displayCenter], _zoom);
     CGFloat vx = wp.x - _origin.x;
     CGFloat vy = wp.y - _origin.y;
     _pin.center = CGPointMake(vx, vy - 17); // 图钉尖端对准该点
@@ -386,14 +482,14 @@ static UIImage *onyx_pinImage(void) {
 }
 
 - (void)updateCoordLabel {
-    CLLocationCoordinate2D wgs = [ONYXCoordTransform wgs84FromGcj02:_centerGCJ];
     NSString *target = _hasCenter
-        ? [NSString stringWithFormat:@"目标 %.6f, %.6f", wgs.latitude, wgs.longitude]
+        ? [NSString stringWithFormat:@"目标 %.6f, %.6f", _centerWGS.latitude, _centerWGS.longitude]
         : @"定位模拟地图";
+    NSString *src = [self sourceName];
     if (_tileFailCount > _tileOkCount && _tileOkCount == 0) {
-        _coordLabel.text = [NSString stringWithFormat:@"%@  ·  瓦片加载失败", target];
+        _coordLabel.text = [NSString stringWithFormat:@"%@  ·  %@加载失败", target, src];
     } else {
-        _coordLabel.text = target;
+        _coordLabel.text = [NSString stringWithFormat:@"%@  ·  %@", target, src];
     }
 }
 
@@ -401,11 +497,10 @@ static UIImage *onyx_pinImage(void) {
 
 - (void)recenterOnWGS:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom animated:(BOOL)animated {
     if (!CLLocationCoordinate2DIsValid(coord)) return;
-    CLLocationCoordinate2D gcj = [ONYXCoordTransform gcj02FromWgs84:coord];
-    _centerGCJ = gcj;
+    _centerWGS = coord;
     _hasCenter = YES;
     _zoom = MAX(kMinZoom, MIN(kMaxZoom, zoom));
-    CGPoint wp = onyx_lonlatToWorld(gcj, _zoom);
+    CGPoint wp = onyx_lonlatToWorld([self displayCenter], _zoom);
     _origin = CGPointMake(wp.x - self.bounds.size.width * 0.5,
                           wp.y - self.bounds.size.height * 0.5);
     [self updateVisibleTiles];
@@ -420,8 +515,7 @@ static UIImage *onyx_pinImage(void) {
 
 - (void)setMarkerCoordinate:(CLLocationCoordinate2D)coord {
     if (!CLLocationCoordinate2DIsValid(coord)) return;
-    CLLocationCoordinate2D gcj = [ONYXCoordTransform gcj02FromWgs84:coord];
-    _centerGCJ = gcj;
+    _centerWGS = coord;
     _hasCenter = YES;
     [self refreshPin];
     [self updateCoordLabel];
