@@ -1,6 +1,6 @@
-# ============ Onyx CI：rootless 双架构出包 deb ============
+# ============ Onyx CI：rootless 双架构出包 deb，并发布到越狱源 ============
 # 公开仓库 macos-latest 走免费 macOS 额度；theos + Apple ld64 出正确绑定
-# arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）各自出 deb
+# arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）各自出独立 deb
 name: Build Onyx
 
 on:
@@ -8,15 +8,18 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (theos + tools)
         run: |
-          brew install ldid xz 2>/dev/null || true
+          brew install ldid dpkg xz 2>/dev/null || true
           sudo mkdir -p /opt/theos
           sudo chown $(whoami) /opt/theos
           git clone --recursive https://github.com/theos/theos.git /opt/theos
@@ -25,88 +28,212 @@ jobs:
           git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /opt/theos/sdks
           cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
 
-      - name: Build package (all archs)
-        # 分别按 arm64（无根）与 arm64e（隐根）各 make package 一次。
-        # 坑H：rootless 模式会把包名锁定为 _iphoneos-arm64.deb，两轮产物同名互相覆盖，
-        #      只剩最后一轮；这里每轮立即按架构重命名 + 修正 control 的 Architecture 字段，
-        #      保证得到 iphoneos-arm64 与 iphoneos-arm64e 两个独立 deb。
+      - name: Build dual-arch debs
+        # theos 在 rootless 模式下会按 ARCHS 自动生成 _iphoneos-arm64 / _iphoneos-arm64e
+        # 两个不同文件名的 deb，且 control 的 Architecture 字段也随之正确，无需再 sed 改写。
         run: |
           export THEOS=/opt/theos
-          brew install dpkg 2>/dev/null || true
           for A in arm64 arm64e; do
             echo "=== make package ARCH=$A ==="
             make clean >/dev/null 2>&1 || true
             make package FINALPACKAGE=1 ARCHS="$A" THEOS_PACKAGE_SCHEME=rootless || exit 1
-            arch_label="iphoneos-$A"
-            W=/tmp/${A}_fix
-            rm -rf "$W" && mkdir -p "$W/root"
-            for DEB in packages/*.deb; do
-              [ -f "$DEB" ] || continue
-              echo "--- fixing arch of $DEB -> $arch_label ---"
-              dpkg-deb -x "$DEB" "$W/root"
-              dpkg-deb -e "$DEB" "$W/root/DEBIAN"
-              sed -i "s/^Architecture:.*/Architecture: $arch_label/" "$W/root/DEBIAN/control"
-              rm -f "$DEB"
-              dpkg-deb -b "$W/root" "packages/com.yzdmm.onyx_0.5.0_$arch_label.deb"
-              echo "wrote packages/com.yzdmm.onyx_0.5.0_$arch_label.deb"
-            done
           done
-          echo "--- collected debs ---"
+          echo "--- packages produced ---"
           ls -la packages/
 
-      - name: List built debs
-        run: |
-          echo "--- packages/ ---"
-          ls -la packages/ 2>/dev/null || echo "(no packages/ dir)"
-
-      - name: Inject network/mapkit entitlements into OnyxApp (loop over deb)
-        # 每个架构 deb 都要重签名 App 二进制的 entitlements（network.client / mapkit 等）。
+      - name: Sign OnyxApp entitlements (per arch)
+        # 每个架构 deb 都要重签名 App 二进制的 entitlements（network.client / mapkit / 定位等）。
         # 用 dpkg-deb 解包/重包（标准 deb 工具，正确处理 GNU 长名格式）。
         run: |
           set -e
-          brew install dpkg 2>/dev/null || true
           cd "$GITHUB_WORKSPACE"
-          WORK=/tmp/onyx_ent
           for DEB in packages/*.deb; do
-            echo "=== processing: $DEB ==="
-            rm -rf "$WORK" && mkdir -p "$WORK/root"
-            dpkg-deb -x "$DEB" "$WORK/root"
-            dpkg-deb -e "$DEB" "$WORK/root/DEBIAN"
-            APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
-            echo "signing: $APP"
-            if [ -f "$APP" ]; then
-              ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
-            else
-              echo "  (App binary not found at $APP, skipping sign)"; continue
+            echo "=== signing: $DEB ==="
+            W=$(mktemp -d)
+            dpkg-deb -x "$DEB" "$W/root"
+            dpkg-deb -e "$DEB" "$W/root/DEBIAN"
+            APP="$W/root/var/jb/Applications/OnyxApp.app/OnyxApp"
+            if [ ! -f "$APP" ]; then
+              echo "OnyxApp binary missing in $DEB"; exit 1
             fi
-            echo "--- 签名后的 entitlements ---"
-            ldid -e "$APP" | grep -E "network.client|mapkit|get-task-allow|personal-information.location" || true
+            ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
+            ldid -e "$APP" | grep -E "network.client|personal-information.location|mapkit|get-task-allow" || true
             BASE=$(basename "$DEB")
             rm -f "$GITHUB_WORKSPACE/packages/$BASE"
-            dpkg-deb -b "$WORK/root" "$GITHUB_WORKSPACE/packages/$BASE"
-            echo "rebuilt deb: $BASE"
+            dpkg-deb -b "$W/root" "$GITHUB_WORKSPACE/packages/$BASE"
           done
 
-      - name: Verify entitlements in repacked debs
+      - name: Verify entitlements
         run: |
           cd "$GITHUB_WORKSPACE"
-          WORK=/tmp/onyx_verify
           for DEB in packages/*.deb; do
-            echo "=== verifying: $DEB ==="
-            rm -rf "$WORK" && mkdir -p "$WORK/root"
-            dpkg-deb -x "$DEB" "$WORK/root"
-            APP="$WORK/root/var/jb/Applications/OnyxApp.app/OnyxApp"
+            W=$(mktemp -d); dpkg-deb -x "$DEB" "$W/root"
+            APP="$W/root/var/jb/Applications/OnyxApp.app/OnyxApp"
             if [ -f "$APP" ]; then
-              ldid -e "$APP" | grep -E "network.client|mapkit" && echo "ENTITLEMENTS_OK" || echo "ENTITLEMENTS_MISSING"
-            else
-              echo "  (no OnyxApp binary — tweak-only deb)"
+              ldid -e "$APP" | grep -qE "network.client" && echo "ENTITLEMENTS_OK $DEB" || echo "ENTITLEMENTS_MISSING $DEB"
             fi
           done
 
       - name: Upload deb artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Onyx
-          path: |
-            packages/*.deb
+          name: Onyx-debs
+          path: packages/*.deb
           if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # 仅当仓库配置了具备 yzdmm2024/repo 写权限的 PAT  Secrets.REPO_PAT 时才发布；
+    # 未配置时本步骤自动跳过，CI 仍保持绿色（仅产出 artifact）。
+    if: ${{ secrets.REPO_PAT != '' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Onyx-debs
+          path: debs
+
+      - name: Publish to jailbreak repo (yzdmm2024/repo)
+        env:
+          GH_TOKEN: ${{ secrets.REPO_PAT }}
+        run: |
+          python3 - <<'PY'
+          import os, re, base64, gzip, bz2, hashlib, json, subprocess, sys
+          from email.utils import formatdate
+
+          REPO = "yzdmm2024/repo"
+          PKG = "com.yzdmm.onyx"
+
+          def gh(args, payload=None, raw=False):
+              cmd = ["gh", "api"]
+              if raw:
+                  cmd += ["-H", "Accept: application/vnd.github.raw"]
+              cmd += args if isinstance(args, list) else [args]
+              if payload is not None:
+                  p = json.dumps(payload)
+                  r = subprocess.run(cmd + ["--input", "-"], input=p, capture_output=True, text=True)
+              else:
+                  r = subprocess.run(cmd, capture_output=True, text=True)
+              if r.returncode != 0:
+                  sys.stderr.write("API_FAIL: " + r.stdout + r.stderr)
+                  sys.exit(1)
+              return r.stdout
+
+          # 用仓库 ID 调用 git data API（POST 不会被 gh 跟随 307 重定向）
+          rid = json.loads(gh(f"repos/{REPO}"))["id"]
+
+          def ctrl_field(deb, name):
+              return subprocess.run(["dpkg-deb", "-f", deb, name], capture_output=True, text=True).stdout.strip()
+
+          debs = sorted(f for f in os.listdir("debs") if f.endswith(".deb"))
+          if not debs:
+              print("no debs found"); sys.exit(1)
+          print("debs:", debs)
+
+          new_stanzas = []
+          deb_filenames = []
+          for f in debs:
+              path = os.path.join("debs", f)
+              data = open(path, "rb").read()
+              fields = {k: ctrl_field(path, k) for k in
+                        ["Package", "Version", "Architecture", "Section", "Maintainer",
+                         "Author", "Depends", "Description", "Name"]}
+              lines = [f"Package: {fields['Package']}"]
+              if fields.get("Name"):
+                  lines.append(f"Name: {fields['Name']}")
+              lines.append(f"Version: {fields['Version']}")
+              lines.append(f"Architecture: {fields['Architecture']}")
+              if fields.get("Section"):
+                  lines.append(f"Section: {fields['Section']}")
+              if fields.get("Maintainer"):
+                  lines.append(f"Maintainer: {fields['Maintainer']}")
+              if fields.get("Author"):
+                  lines.append(f"Author: {fields['Author']}")
+              if fields.get("Depends"):
+                  lines.append(f"Depends: {fields['Depends']}")
+              lines.append(f"Filename: debs/{f}")
+              lines.append(f"Size: {len(data)}")
+              lines.append(f"MD5sum: {hashlib.md5(data).hexdigest()}")
+              lines.append(f"SHA1: {hashlib.sha1(data).hexdigest()}")
+              lines.append(f"SHA256: {hashlib.sha256(data).hexdigest()}")
+              if fields.get("Description"):
+                  lines.append(f"Description: {fields['Description']}")
+              new_stanzas.append("\n".join(lines))
+              deb_filenames.append((f, data))
+
+          # 拉取当前 Packages，替换本包旧条目
+          cur_b64 = gh(f"repositories/{rid}/contents/Packages?ref=main", raw=True)
+          # contents API 返回 base64；用 --jq 时已是原始，这里 raw 返回文本
+          pkgs = cur_b64
+          stz = [s for s in re.split(r"\n\n+", pkgs) if s.strip()]
+          kept = [s for s in stz if f"Package: {PKG}" not in s]
+          kept.extend(new_stanzas)
+          new_pkgs = "\n\n".join(kept) + "\n"
+          pkgs_utf8 = new_pkgs.encode("utf-8")
+          gz = gzip.compress(pkgs_utf8, 9)
+          bz = bz2.compress(pkgs_utf8, 9)
+
+          # Release 头保留（Origin/Label/Architectures...），仅更新 Date + 校验和
+          rel = gh(f"repositories/{rid}/contents/Release?ref=main", raw=True)
+          head_lines = [l for l in rel.split("MD5Sum:")[0].splitlines() if not l.startswith("Date:")]
+          head = "\n".join(head_lines).rstrip() + "\nDate: " + formatdate(usegmt=True) + "\n"
+
+          def cksum(data, name, algo):
+              return f" {algo(data).hexdigest()} {len(data)} {name}"
+
+          new_rel = (head +
+                     "MD5Sum:\n" +
+                     cksum(pkgs_utf8, "Packages", hashlib.md5) +
+                     cksum(gz, "Packages.gz", hashlib.md5) +
+                     cksum(bz, "Packages.bz2", hashlib.md5) + "\n" +
+                     "SHA1:\n" +
+                     cksum(pkgs_utf8, "Packages", hashlib.sha1) +
+                     cksum(gz, "Packages.gz", hashlib.sha1) +
+                     cksum(bz, "Packages.bz2", hashlib.sha1) + "\n" +
+                     "SHA256:\n" +
+                     cksum(pkgs_utf8, "Packages", hashlib.sha256) +
+                     cksum(gz, "Packages.gz", hashlib.sha256) +
+                     cksum(bz, "Packages.bz2", hashlib.sha256) + "\n")
+
+          # git data 提交
+          ref = json.loads(gh(f"repositories/{rid}/git/ref/heads/main"))
+          base = ref["object"]["sha"]
+          c = json.loads(gh(f"repositories/{rid}/git/commits/{base}"))
+          base_tree = c["tree"]["sha"]
+
+          # 清理 debs/ 里同包旧版本文件
+          old = []
+          try:
+              listing = json.loads(gh(f"repositories/{rid}/contents/debs?ref=main"))
+              for ent in listing:
+                  n = ent.get("name", "")
+                  if n.startswith(PKG + "_") and n not in [fn for fn, _ in deb_filenames]:
+                      old.append("debs/" + n)
+          except Exception as e:
+              print("list debs warn:", e)
+
+          files = {
+              "Packages": pkgs_utf8,
+              "Packages.gz": gz,
+              "Packages.bz2": bz,
+              "Release": new_rel.encode("utf-8"),
+          }
+          for fn, data in deb_filenames:
+              files["debs/" + fn] = data
+
+          blobs = {}
+          for path, data in files.items():
+              sha = json.loads(gh(f"repositories/{rid}/git/blobs",
+                                  payload={"content": base64.b64encode(data).decode(), "encoding": "base64"}))["sha"]
+              blobs[path] = sha
+          entries = [{"path": p, "mode": "100644", "type": "blob", "sha": s} for p, s in blobs.items()]
+          for p in old:
+              entries.append({"path": p, "mode": "100644", "type": "blob", "sha": None})
+          tree = json.loads(gh(f"repositories/{rid}/git/trees",
+                               payload={"base_tree": base_tree, "tree": entries}))["sha"]
+          msg = f"{PKG} v{ctrl_field(os.path.join('debs', debs[0]), 'Version')} (CI publish)"
+          commit = json.loads(gh(f"repositories/{rid}/git/commits",
+                                 payload={"message": msg, "tree": tree, "parents": [base]}))["sha"]
+          gh(f"repositories/{rid}/git/refs/heads/main", payload={"sha": commit, "force": False})
+          print("PUBLISHED", msg, "->", commit)
+          PY
