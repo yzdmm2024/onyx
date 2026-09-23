@@ -61,26 +61,25 @@ jobs:
             W=$(mktemp -d)
             dpkg-deb -x "$DEB" "$W/root"
             dpkg-deb -e "$DEB" "$W/root/DEBIAN"
-            # 重签 App 二进制（network.client / mapkit / 定位等 entitlements）
-            ENT=App/OnyxApp.entitlements
-            if [ -f "$ENT" ]; then
-              /usr/bin/codesign --force --sign - --entitlements "$ENT" "$W/root/var/jb/Applications/OnyxApp.app/OnyxApp" 2>/dev/null || \
-              /usr/bin/codesign --force --sign - --entitlements "$ENT" "$W/root/Applications/OnyxApp.app/OnyxApp" 2>/dev/null || true
-            fi
+            # 用 ldid 把 entitlements 签进 App 二进制（locationd.simulation / network / 定位等）
+            APP=$(find "$W/root" -name OnyxApp -type f | head -1)
+            if [ -z "$APP" ]; then echo "WARN: OnyxApp 未在 $DEB 中找到"; continue; fi
+            ldid -SApp/OnyxApp.entitlements "$APP"
             rm -f "$DEB"
             dpkg-deb -b "$W/root" "$DEB"
-            echo "ENTITLEMENTS_OK $DEB"
+            echo "SIGNED $DEB"
           done
 
       - name: Verify entitlements
         run: |
+          set -e
           for DEB in packages/*.deb; do
             W=$(mktemp -d)
             dpkg-deb -x "$DEB" "$W/root"
             APP=$(find "$W/root" -name OnyxApp -type f | head -1)
-            if [ -n "$APP" ]; then
-              /usr/bin/codesign -d --entitlements - "$APP" 2>/dev/null | grep -E 'com.apple.security.(network|location|mapkit)|get-task-allow' && echo "  OK: $DEB" || echo "  WARN: no ents in $DEB"
-            fi
+            ldid -e "$APP" 2>/dev/null | grep -q 'com.apple.locationd.simulation' \
+              && echo "OK ents: $DEB" \
+              || { echo "FAIL: 未签入 entitlements -> $DEB"; exit 1; }
           done
 
       - name: Upload deb artifacts
