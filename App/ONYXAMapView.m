@@ -1,7 +1,10 @@
 #import "ONYXAMapView.h"
+#import "ONYXCoordTransform.h"
 #import <math.h>
 
-// 坐标语义：MKMapView 使用 WGS-84，直接使用面板内部 currentCoord，无需像高德那样转 GCJ-02。
+// 坐标语义：高德瓦片为 GCJ-02，故 MKMapView 的地图空间按 GCJ-02 理解；
+// 对外（面板/模拟）仍为 WGS-84，进出处互转，保证标记与高德瓦片对齐、模拟坐标准确。
+// 采用传统高德瓦片端点（webrd04.is.autonavi.com），不依赖高德 SDK，iOS 无法直连苹果瓦片时也能出图。
 @interface ONYXAMapView () <MKMapViewDelegate>
 @property (nonatomic, strong) MKMapView *mapView;
 @property (nonatomic, strong) MKPointAnnotation *marker;
@@ -30,6 +33,14 @@
     _mapView.showsCompass = YES;
     _mapView.showsScale = YES;
     [self addSubview:_mapView];
+
+    // 高德瓦片叠加层：出图不依赖苹果地图服务（原在此设备为空白）。style=8 为标准矢量样式。
+    MKTileOverlay *tiles = [[MKTileOverlay alloc] initWithURLTemplate:
+        @"https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"];
+    tiles.canReplaceMapContent = YES;
+    tiles.minimumZ = 0;
+    tiles.maximumZ = 19;
+    [_mapView addOverlay:tiles level:MKOverlayLevelAboveRoads];
 
     [NSLayoutConstraint activateConstraints:@[
         [_mapView.topAnchor constraintEqualToAnchor:self.topAnchor],
@@ -71,12 +82,24 @@
     }
 }
 
+#pragma mark - 坐标系互转（对外 WGS-84，地图空间 GCJ-02）
+
+// WGS-84 -> GCJ-02（高德瓦片坐标）
+- (CLLocationCoordinate2D)toGCJ:(CLLocationCoordinate2D)coord {
+    return [ONYXCoordTransform gcj02FromWgs84:coord];
+}
+// GCJ-02（高德瓦片坐标） -> WGS-84
+- (CLLocationCoordinate2D)toWGS:(CLLocationCoordinate2D)coord {
+    return [ONYXCoordTransform wgs84FromGcj02:coord];
+}
+
 #pragma mark - 交互
 
 - (void)handleTap:(UITapGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateEnded) return;
     CGPoint pt = [g locationInView:_mapView];
-    CLLocationCoordinate2D coord = [_mapView convertPoint:pt toCoordinateFromView:_mapView];
+    CLLocationCoordinate2D gcjCoord = [_mapView convertPoint:pt toCoordinateFromView:_mapView];
+    CLLocationCoordinate2D coord = [self toWGS:gcjCoord];
     [self placeMarkerAt:coord];
     if ([self.delegate respondsToSelector:@selector(amapView:didPickCoordinate:)]) {
         [self.delegate amapView:self didPickCoordinate:coord];
@@ -85,11 +108,12 @@
 
 - (void)placeMarkerAt:(CLLocationCoordinate2D)coord {
     if (!CLLocationCoordinate2DIsValid(coord)) return;
+    CLLocationCoordinate2D m = [self toGCJ:coord];
     if (self.marker) {
-        _marker.coordinate = coord;
+        _marker.coordinate = m;
     } else {
         _marker = [[MKPointAnnotation alloc] init];
-        _marker.coordinate = coord;
+        _marker.coordinate = m;
         _marker.title = @"模拟位置";
         [_mapView addAnnotation:_marker];
     }
@@ -110,10 +134,18 @@
 
 #pragma mark - MKMapViewDelegate
 
+// 渲染高德瓦片叠加层
+- (MKOverlayRenderer *)mapView:(MKMapView *)mapView rendererForOverlay:(id<MKOverlay>)overlay {
+    if ([overlay isKindOfClass:[MKTileOverlay class]]) {
+        return [[MKTileOverlayRenderer alloc] initWithOverlay:overlay];
+    }
+    return nil;
+}
+
 - (void)mapView:(MKMapView *)mapView didUpdateUserLocation:(MKUserLocation *)userLocation {
     CLLocationCoordinate2D c = userLocation.coordinate;
     if (!CLLocationCoordinate2DIsValid(c)) return;
-    // 跟随蓝点：初始或发生明显跳变（开始模拟/切换坐标）时把地图平移到蓝点，
+    // 跟随蓝点：初始或发生明显跳变（开始模拟/切换坐标）时把地图平移到蓝点在瓦片上的位置，
     // 即可直接看到模拟是否生效；静止时不打扰用户平移浏览。
     BOOL first = !CLLocationCoordinate2DIsValid(_lastUserCoordinate);
     CLLocationDistance moved = 0;
@@ -123,7 +155,7 @@
         moved = [userLocation.location distanceFromLocation:last];
     }
     if (first || moved > 50) {
-        [_mapView setCenterCoordinate:c animated:YES];
+        [_mapView setCenterCoordinate:[self toGCJ:c] animated:YES];
     }
     _lastUserCoordinate = c;
 }
@@ -132,12 +164,13 @@
 
 - (void)setCenterCoordinate:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom showMarker:(BOOL)showMarker {
     if (!CLLocationCoordinate2DIsValid(coord)) return;
+    CLLocationCoordinate2D m = [self toGCJ:coord];
     if (zoom >= 3) {
         CLLocationDegrees d = [self latitudeDeltaForZoom:zoom];
-        MKCoordinateRegion region = MKCoordinateRegionMake(coord, MKCoordinateSpanMake(d, d));
+        MKCoordinateRegion region = MKCoordinateRegionMake(m, MKCoordinateSpanMake(d, d));
         [_mapView setRegion:region animated:YES];
     } else {
-        [_mapView setCenterCoordinate:coord animated:YES];
+        [_mapView setCenterCoordinate:m animated:YES];
     }
     if (showMarker) [self placeMarkerAt:coord];
 }
