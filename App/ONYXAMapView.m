@@ -7,6 +7,7 @@
 @property (nonatomic, strong) MKPointAnnotation *marker;
 @property (nonatomic, strong) CLLocationManager *locationManager;
 @property (nonatomic, assign) CLLocationCoordinate2D lastUserCoordinate;
+@property (nonatomic, strong) UILabel *coordLabel; // 常驻坐标横幅：瓦片不可用时也可见，便于验证模拟
 @end
 
 @implementation ONYXAMapView
@@ -23,6 +24,8 @@
     _mapView = [[MKMapView alloc] initWithFrame:self.bounds];
     _mapView.translatesAutoresizingMaskIntoConstraints = NO;
     _mapView.delegate = self;
+    _mapView.mapType = MKMapTypeStandard;
+    _mapView.showsBuildings = YES;
     _mapView.showsUserLocation = YES; // 蓝点跟随系统定位：开始模拟后跳出到目标点 = 修改成功
     _mapView.showsCompass = YES;
     _mapView.showsScale = YES;
@@ -41,6 +44,26 @@
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     [_mapView addGestureRecognizer:tap];
+
+    // 常驻坐标横幅：叠加在地图上，瓦片/定位不可用时也能看到目标坐标
+    _coordLabel = [UILabel new];
+    _coordLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _coordLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    _coordLabel.textColor = [UIColor labelColor];
+    _coordLabel.backgroundColor = [UIColor systemBackgroundColor];
+    _coordLabel.layer.cornerRadius = 14;
+    _coordLabel.layer.masksToBounds = YES;
+    _coordLabel.layer.borderWidth = 0.3;
+    _coordLabel.layer.borderColor = [UIColor separatorColor].CGColor;
+    _coordLabel.textAlignment = NSTextAlignmentCenter;
+    [self addSubview:_coordLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [_coordLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:10],
+        [_coordLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+        [_coordLabel.leftAnchor constraintGreaterThanOrEqualToAnchor:self.leftAnchor constant:8],
+        [_coordLabel.rightAnchor constraintLessThanOrEqualToAnchor:self.rightAnchor constant:-8],
+        [_coordLabel.heightAnchor constraintEqualToConstant:28]
+    ]];
 
     _lastUserCoordinate = kCLLocationCoordinate2DInvalid;
     if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
@@ -69,6 +92,13 @@
         _marker.coordinate = coord;
         _marker.title = @"模拟位置";
         [_mapView addAnnotation:_marker];
+    }
+    [self updateCoordLabel:coord];
+}
+
+- (void)updateCoordLabel:(CLLocationCoordinate2D)coord {
+    if (_coordLabel) {
+        _coordLabel.text = [NSString stringWithFormat:@"目标 %.6f, %.6f", coord.latitude, coord.longitude];
     }
 }
 
