@@ -25,22 +25,23 @@ jobs:
           git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /opt/theos/sdks
           cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
 
-      - name: Build package (rootless)
+      - name: Build package (all archs)
+        # theos 对多 ARCHS 默认只按第一个架构出包；这里分别按 arm64（无根）与
+        # arm64e（隐根）各 make package 一次，得到两个架构标签各自独立的 deb。
         run: |
           export THEOS=/opt/theos
-          make clean 2>/dev/null || true
-          make package FINALPACKAGE=1
+          for A in arm64 arm64e; do
+            echo "=== make package ARCH=$A ==="
+            make clean >/dev/null 2>&1 || true
+            make package FINALPACKAGE=1 ARCHS="$A" THEOS_PACKAGE_SCHEME=rootless || exit 1
+          done
+          echo "--- collected debs ---"
+          ls -la packages/
 
       - name: List built debs
         run: |
           echo "--- packages/ ---"
           ls -la packages/ 2>/dev/null || echo "(no packages/ dir)"
-          echo "--- .theos/debs/ ---"
-          ls -la .theos/debs/ 2>/dev/null || echo "(no .theos/debs dir)"
-          # 多架构时把各架构 deb 收集到 packages/（若 theos 没自动放）
-          mkdir -p packages
-          cp .theos/debs/*.deb packages/ 2>/dev/null || true
-          ls -la packages/
 
       - name: Inject network/mapkit entitlements into OnyxApp (loop over deb)
         # 每个架构 deb 都要重签名 App 二进制的 entitlements（network.client / mapkit 等）。
