@@ -103,18 +103,10 @@ static BOOL _active(void) {
                                      s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier); s_logNoEnabled = YES; }
         return NO;
     }
-    NSString *bid = NSBundle.mainBundle.bundleIdentifier;
-    if (!bid.length) return NO;
-    // 必须有明确选择；空列表 = 不注入任何 App
-    if (!s_selectedApps || s_selectedApps.count == 0) {
-        if (!s_logEmpty) { NSLog(@"[Onyx] _active=NO selected EMPTY bid=%@", bid); s_logEmpty = YES; }
-        return NO;
-    }
-    if (![s_selectedApps containsObject:bid]) {
-        if (!s_logMismatch) { NSLog(@"[Onyx] _active=NO bid=%@ NOT in selected=%@",
-                                    bid, s_selectedApps.allObjects); s_logMismatch = YES; }
-        return NO;
-    }
+    // 恢复 0.5.0 全局模拟语义：enabled 且坐标有效即对所有 App 生效，
+    // 不再要求先在「应用列表」勾选。系统级 CLSimulationManager 同为全局生效，
+    // Tweak 的 hook 作兜底拦截，确保系统定位与三类定位 SDK 都返回假坐标；
+    // 需要回到真实位置时由 App 内「恢复到真实位置」按钮把 enabled 置 0。
     return YES;
 }
 

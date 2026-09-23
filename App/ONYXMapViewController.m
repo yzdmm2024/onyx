@@ -379,6 +379,11 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     }
     // 记忆开启：恢复上次模拟状态；关闭：每次进入都停止模拟
     if (enObj) self.running = memory ? [enObj boolValue] : NO;
+    // 恢复系统级模拟（0.5.0 机制）：记忆状态下若处于运行中，直接对 locationd 全局注入
+    if (self.running) {
+        [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude
+                                                                   longitude:self.currentCoord.longitude];
+    }
     [self updateStatus];
     [self loadRecent];
 }
@@ -424,33 +429,44 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
 - (void)saveTapped:(UIButton *)sender {
     self.running = YES;
+    [self startSystemSimulation]; // 全局注入 locationd（0.5.0 机制）
     [self saveState];
     [self updateStatus];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:@"已启用。勾选的 App 会收到此坐标，未勾选的 App 保持真实位置。" preferredStyle:UIAlertControllerStyleAlert];
+    NSString *msg = @"已启用全局模拟。所有使用系统定位的 App（含百度/高德/微信等）都会收到所选坐标。";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)applyTapped:(UIButton *)sender {
     self.running = YES;
+    [self startSystemSimulation];
     [self saveState];
     [self updateStatus];
 }
 
 - (void)startTapped:(UIButton *)sender {
     self.running = YES;
+    [self startSystemSimulation];
     [self saveState];
     [self updateStatus];
 }
 
 - (void)stopTapped:(UIButton *)sender {
     self.running = NO;
+    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
     [self saveState];
     [self updateStatus];
 }
 
+// 启动系统级全局模拟：写入坐标并注入 locationd
+- (void)startSystemSimulation {
+    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude
+                                                               longitude:self.currentCoord.longitude];
+}
+
 - (void)restoreTapped:(id)sender {
-    // 先清掉 locationd 里可能残留的系统级模拟状态（兼容旧版升级上来的情况）
+    // 恢复真实位置：先清掉 locationd 里残留的系统级模拟状态
     [[ONYXLocationSimulator sharedSimulator] stopSimulation];
     self.running = NO;
     [self saveState];
