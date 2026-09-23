@@ -83,6 +83,7 @@ static UIImage *onyx_pinImage(void) {
 @property (nonatomic, assign) NSInteger tileOkCount;
 @property (nonatomic, assign) NSUInteger tileFailCount;
 @property (nonatomic, assign) BOOL reportedFail;
+@property (nonatomic, strong) NSError *lastError;
 
 @property (nonatomic, assign) CGPoint panStartOrigin;
 @property (nonatomic, assign) CGFloat pinchStartZoom;
@@ -314,6 +315,7 @@ static UIImage *onyx_pinImage(void) {
                     [s loadTileForKey:key x:x y:y z:z https:NO];
                     return;
                 }
+                s->_lastError = error;
                 [s tileLoadFailed];
             });
             return;
@@ -329,6 +331,7 @@ static UIImage *onyx_pinImage(void) {
                     [s loadTileForKey:key x:x y:y z:z https:NO];
                     return;
                 }
+                s->_lastError = [NSError errorWithDomain:@"OnyxTile" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"服务器返回非图片数据"}];
                 [s tileLoadFailed];
             });
             return;
