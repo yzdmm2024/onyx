@@ -3,6 +3,7 @@
 #import "ONYXAppsViewController.h"
 #import "ONYXAMapView.h"
 #import "ONYXHistoryViewController.h"
+#import "ONYXActiveAppsViewController.h"
 #import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
 #import <math.h>
@@ -40,6 +41,16 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self loadRecent]; // 历史页删除/备注后返回，刷新最近快捷
+    [self refreshStatusPanel];
+    // 若运行中但已无任何已选应用（左滑全清除），自动停止
+    CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+    NSInteger cnt = 0;
+    if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
+    if (self.running && cnt == 0) {
+        self.running = NO;
+        [[ONYXLocationSimulator sharedSimulator] stopSimulation];
+        [self updateStatus];
+    }
 }
 
 - (void)viewDidLoad {
@@ -103,6 +114,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.statusBar.clipsToBounds = YES;
     self.statusBar.textAlignment = NSTextAlignmentCenter;
     self.statusBar.text = @"未启用";
+    self.statusBar.userInteractionEnabled = YES;
+    UITapGestureRecognizer *stTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeAppsTapped:)];
+    [self.statusBar addGestureRecognizer:stTap];
     [self.view addSubview:self.statusBar];
 
     // 地图状态标签
@@ -185,31 +199,26 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     coordRow.translatesAutoresizingMaskIntoConstraints = NO;
     self.latLabel = [self label:@"纬度" value:@"0.000000"];
     self.lngLabel = [self label:@"经度" value:@"0.000000"];
+    UILabel *sysL = [self label:@"坐标系统" value:@"WGS-84"];
+    sysL.textColor = [UIColor systemBlueColor];
     [coordRow addSubview:self.latLabel];
     [coordRow addSubview:self.lngLabel];
+    [coordRow addSubview:sysL];
     [NSLayoutConstraint activateConstraints:@[
         [self.latLabel.leadingAnchor constraintEqualToAnchor:coordRow.leadingAnchor],
         [self.latLabel.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
         [self.latLabel.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor],
-        [self.latLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.48],
-        [self.lngLabel.trailingAnchor constraintEqualToAnchor:coordRow.trailingAnchor],
+        [self.latLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.38],
+        [self.lngLabel.leadingAnchor constraintEqualToAnchor:self.latLabel.trailingAnchor constant:6],
         [self.lngLabel.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
         [self.lngLabel.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor],
-        [self.lngLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.48]
+        [self.lngLabel.widthAnchor constraintEqualToAnchor:coordRow.widthAnchor multiplier:0.38],
+        [sysL.leadingAnchor constraintEqualToAnchor:self.lngLabel.trailingAnchor constant:6],
+        [sysL.trailingAnchor constraintEqualToAnchor:coordRow.trailingAnchor],
+        [sysL.topAnchor constraintEqualToAnchor:coordRow.topAnchor],
+        [sysL.bottomAnchor constraintEqualToAnchor:coordRow.bottomAnchor]
     ]];
     [stack addArrangedSubview:coordRow];
-
-    UILabel *systemNote = [[UILabel alloc] init];
-    systemNote.text = @"坐标系统：WGS-84";
-    systemNote.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    systemNote.textColor = [UIColor systemBlueColor];
-    [stack addArrangedSubview:systemNote];
-
-    UILabel *gestureHint = [[UILabel alloc] init];
-    gestureHint.text = @"地图：双指缩放 · 双击放大 · 长按选点";
-    gestureHint.font = [UIFont systemFontOfSize:12];
-    gestureHint.textColor = [UIColor tertiaryLabelColor];
-    [stack addArrangedSubview:gestureHint];
 
     UILabel *quickTitle = [[UILabel alloc] init];
     quickTitle.text = @"快速定位";
@@ -425,6 +434,28 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
 - (void)openAppsList:(id)sender {
     ONYXAppsViewController *vc = [[ONYXAppsViewController alloc] initWithStyle:UITableViewStylePlain];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
+// 点击状态栏「运行中 · X App」查看当前参与模拟的应用列表，左滑可移除并同步
+- (void)activeAppsTapped:(UITapGestureRecognizer *)gesture {
+    ONYXActiveAppsViewController *vc = [[ONYXActiveAppsViewController alloc] initWithStyle:UITableViewStylePlain];
+    __weak typeof(self) wself = self;
+    vc.onRemove = ^{
+        __strong typeof(self) s = wself;
+        if (!s) return;
+        [s refreshStatusPanel];
+        // 若已全部移除，自动停止模拟
+        CFPropertyListRef arr = CFPreferencesCopyAppValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"));
+        NSInteger cnt = 0;
+        if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
+        if (cnt == 0) {
+            s.running = NO;
+            [[ONYXLocationSimulator sharedSimulator] stopSimulation];
+            [s updateStatus];
+        }
+    };
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
     [self presentViewController:nav animated:YES completion:nil];
 }

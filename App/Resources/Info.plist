@@ -16,10 +16,31 @@
     <string>定位模拟</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFiles</key>
+    <array>
+        <string>AppIcon40x40@2x</string>
+        <string>AppIcon60x60@2x</string>
+        <string>AppIcon76x76@2x</string>
+        <string>AppIcon83.5x83.5@2x</string>
+    </array>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60@2x</string>
+                <string>AppIcon76x76@2x</string>
+                <string>AppIcon83.5x83.5@2x</string>
+            </array>
+        </dict>
+    </dict>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.0</string>
+	<string>0.4.1</string>
     <key>CFBundleVersion</key>
-    <string>0.4.0</string>
+    <string>0.4.1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIApplicationSceneManifest</key>
