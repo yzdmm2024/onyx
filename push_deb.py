@@ -132,14 +132,14 @@ def main():
     # 解决 Sileo “Didn't find available architectures” 警告 + 源名称显示为 GitHub 用户名的问题。
     now = formatdate(usegmt=True)
     head = (
-        "Origin: Onyx\n"
-        "Label: Onyx\n"
+        "Origin: Ac`ljcr\n"
+        "Label: Ac`ljcr\n"
         "Suite: stable\n"
         "Codename: stable\n"
         "Version: 1.0\n"
         "Architectures: iphoneos-arm64\n"
         "Components: main\n"
-        "Description: Onyx 越狱插件源（定位模拟等）\n"
+        "Description: Ac`ljcr 越狱插件源（定位模拟等）\n"
         "Date: %s\n" % now
     )
     bm5, bs1, bs256 = [], [], []
