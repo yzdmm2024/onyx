@@ -20,4 +20,5 @@
 - (void)setMarkerCoordinate:(CLLocationCoordinate2D)coord;
 - (void)zoomIn;
 - (void)zoomOut;
+- (void)reloadTiles;
 @end

@@ -100,6 +100,7 @@ static UIImage *onyx_pinImage(void) {
 
 @property (nonatomic, assign) CGPoint panStartOrigin;
 @property (nonatomic, assign) CGFloat pinchStartZoom;
+@property (nonatomic, assign) CGFloat selfScale;
 @end
 
 @implementation ONYXAMapView
@@ -294,23 +295,44 @@ static UIImage *onyx_pinImage(void) {
 }
 
 - (void)handlePinch:(UIPinchGestureRecognizer *)g {
-    if (g.state == UIGestureRecognizerStateBegan) {
-        _pinchStartZoom = _zoom;
-        return;
-    }
-    if (g.state != UIGestureRecognizerStateChanged) return;
-    CGPoint focal = [g locationInView:self];
-    CGFloat desired = _pinchStartZoom + log2(g.scale);
-    NSInteger newZoom = (NSInteger)lround(desired);
-    newZoom = MAX(kMinZoom, MIN(kMaxZoom, newZoom));
-    if (newZoom != _zoom) {
-        CLLocationCoordinate2D anchor = onyx_worldToLonlat(CGPointMake(_origin.x + focal.x, _origin.y + focal.y), _zoom);
-        _zoom = newZoom;
-        CGPoint awp = onyx_lonlatToWorld(anchor, _zoom);
-        _origin = CGPointMake(awp.x - focal.x, awp.y - focal.y);
-        _pinchStartZoom = _zoom;
-        [self updateVisibleTiles];
-        [self refreshPin];
+    switch (g.state) {
+        case UIGestureRecognizerStateBegan: {
+            _pinchStartZoom = _zoom;
+            _selfScale = 1.0;
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            CGFloat s = g.scale;
+            // 限制单手势内能跨过的 zoom 档位，避免一下跳太远，像照片那样连续缩放
+            CGFloat minS = pow(2.0, (double)kMinZoom - (double)_pinchStartZoom);
+            CGFloat maxS = pow(2.0, (double)kMaxZoom - (double)_pinchStartZoom);
+            s = MAX(minS, MIN(maxS, s));
+            _selfScale = s;
+            self.transform = CGAffineTransformMakeScale(s, s);
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed: {
+            self.transform = CGAffineTransformIdentity;
+            CGFloat s = _selfScale;
+            if (fabs(s - 1.0) > 0.03) {
+                CGFloat desired = (double)_pinchStartZoom + log2(s);
+                NSInteger newZoom = (NSInteger)lround(desired);
+                newZoom = MAX(kMinZoom, MIN(kMaxZoom, newZoom));
+                if (newZoom != _zoom) {
+                    CGPoint c = CGPointMake(self.bounds.size.width * 0.5, self.bounds.size.height * 0.5);
+                    CLLocationCoordinate2D anchor = onyx_worldToLonlat(CGPointMake(_origin.x + c.x, _origin.y + c.y), _zoom);
+                    _zoom = newZoom;
+                    CGPoint awp = onyx_lonlatToWorld(anchor, _zoom);
+                    _origin = CGPointMake(awp.x - c.x, awp.y - c.y);
+                    [self updateVisibleTiles];
+                    [self refreshPin];
+                }
+            }
+            break;
+        }
+        default: break;
     }
 }
 
@@ -568,6 +590,20 @@ static UIImage *onyx_pinImage(void) {
     _origin = CGPointMake(awp.x - c.x, awp.y - c.y);
     [self updateVisibleTiles];
     [self refreshPin];
+}
+
+// 网络环境变化（如刚开 VPN）后手动刷新：回到默认源并重新加载全部瓦片
+- (void)reloadTiles {
+    _tileOkCount = 0;
+    _tileFailCount = 0;
+    _consecFail = 0;
+    _reportedFail = NO;
+    _lastError = nil;
+    [self applySourceIndex:0 animated:NO];
+    [self updateCoordLabel];
+    if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+        [self.delegate amapView:self didUpdateStatus:@"已刷新，重新加载瓦片中…"];
+    }
 }
 
 @end

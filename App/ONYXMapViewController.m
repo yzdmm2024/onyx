@@ -2,6 +2,7 @@
 #import "ONYXCoordTransform.h"
 #import "ONYXAppsViewController.h"
 #import "ONYXAMapView.h"
+#import "ONYXHistoryViewController.h"
 #import "ONYXLocationSimulator.h"
 #import <CoreLocation/CoreLocation.h>
 #import <math.h>
@@ -27,12 +28,19 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 @property (nonatomic, strong) UILabel *statusBar;
 @property (nonatomic, strong) UILabel *mapStatLabel;
 @property (nonatomic, strong) UISegmentedControl *recentControl;
+@property (nonatomic, strong) UIButton *historyButton;
+@property (nonatomic, copy) NSString *placeName;
 
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // 恒为 WGS-84（与 CGCS2000 数值一致）
 @property (nonatomic, assign) BOOL running;
 @end
 
 @implementation ONYXMapViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self loadRecent]; // 历史页删除/备注后返回，刷新最近快捷
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -54,7 +62,21 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 // 内部 currentCoord 为 WGS-84（与原模板一致）。
 
 - (void)setupNav {
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"应用" style:UIBarButtonItemStylePlain target:self action:@selector(openAppsList:)];
+    UIBarButtonItem *refresh = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.clockwise"]
+                                                                style:UIBarButtonItemStylePlain
+                                                               target:self
+                                                               action:@selector(refreshMapAction:)];
+    UIBarButtonItem *apps = [[UIBarButtonItem alloc] initWithTitle:@"应用"
+                                                             style:UIBarButtonItemStylePlain
+                                                            target:self
+                                                            action:@selector(openAppsList:)];
+    self.navigationItem.rightBarButtonItems = @[apps, refresh];
+}
+
+// 手动刷新地图瓦片（网络变化如刚开 VPN 后，无需杀掉 App 重开）
+- (void)refreshMapAction:(id)sender {
+    [self.amapView reloadTiles];
+    [self refreshStatusPanel];
 }
 
 - (void)setupMap {
@@ -178,7 +200,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [stack addArrangedSubview:coordRow];
 
     UILabel *systemNote = [[UILabel alloc] init];
-    systemNote.text = @"坐标系统：CGCS2000（大地2000）";
+    systemNote.text = @"坐标系统：WGS-84";
     systemNote.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     systemNote.textColor = [UIColor systemBlueColor];
     [stack addArrangedSubview:systemNote];
@@ -242,6 +264,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [btnRow addArrangedSubview:self.startButton];
     [btnRow addArrangedSubview:self.stopButton];
     [stack addArrangedSubview:btnRow];
+
+    self.historyButton = [self buttonWithTitle:@"历史记录" color:[UIColor systemGrayColor] action:@selector(openHistory:)];
+    [stack addArrangedSubview:self.historyButton];
 }
 
 - (UILabel *)label:(NSString *)title value:(NSString *)value {
@@ -404,6 +429,21 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self presentViewController:nav animated:YES completion:nil];
 }
 
+- (void)openHistory:(id)sender {
+    ONYXHistoryViewController *vc = [[ONYXHistoryViewController alloc] initWithStyle:UITableViewStylePlain];
+    vc.title = @"历史记录";
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    __weak typeof(self) wself = self;
+    vc.onSelect = ^(CLLocationCoordinate2D coord){
+        __strong typeof(self) s = wself;
+        if (!s) return;
+        s.currentCoord = coord;
+        [s placePinAt:coord];
+        [s reverseGeocode:coord];
+    };
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
 #pragma mark - Search（CLGeocoder 正向/反向地理编码，走系统 locationd）
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
@@ -448,7 +488,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     if (p.subLocality) [parts addObject:p.subLocality];
     if (p.thoroughfare) [parts addObject:p.thoroughfare];
     if (p.name) [parts addObject:p.name];
-    self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", parts.count ? [parts componentsJoinedByString:@" "] : name];
+    NSString *place = parts.count ? [parts componentsJoinedByString:@" "] : name;
+    self.placeName = place;
+    self.addressLabel.text = [NSString stringWithFormat:@"当前：%@", place];
 }
 
 - (void)reverseGeocode:(CLLocationCoordinate2D)coord {
@@ -474,19 +516,25 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     if (!CLLocationCoordinate2DIsValid(self.currentCoord)) return;
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSMutableArray *recents = [[defaults objectForKey:kRecentCoordsKey] mutableCopy] ?: [NSMutableArray array];
-    NSDictionary *entry = @{
-        @"lat": @(self.currentCoord.latitude),
-        @"lng": @(self.currentCoord.longitude),
-        @"time": @([[NSDate date] timeIntervalSince1970])
-    };
-    // 去重：若已有相同坐标移到最前
+    // 去重：若已有相同坐标移到最前，并保留其备注
+    NSString *existingNote = nil;
     NSUInteger idx = [recents indexOfObjectPassingTest:^BOOL(id obj, NSUInteger i, BOOL *stop) {
         NSDictionary *d = obj;
         double la = [d[@"lat"] doubleValue];
         double ln = [d[@"lng"] doubleValue];
         return fabs(la - self.currentCoord.latitude) < 0.0001 && fabs(ln - self.currentCoord.longitude) < 0.0001;
     }];
-    if (idx != NSNotFound) [recents removeObjectAtIndex:idx];
+    if (idx != NSNotFound) {
+        existingNote = recents[idx][@"note"];
+        [recents removeObjectAtIndex:idx];
+    }
+    NSDictionary *entry = @{
+        @"lat": @(self.currentCoord.latitude),
+        @"lng": @(self.currentCoord.longitude),
+        @"time": @([[NSDate date] timeIntervalSince1970]),
+        @"name": self.placeName ?: @"",
+        @"note": existingNote ?: @""
+    };
     [recents insertObject:entry atIndex:0];
     if (recents.count > 5) [recents removeObjectsInRange:NSMakeRange(5, recents.count - 5)];
     [defaults setObject:recents forKey:kRecentCoordsKey];
@@ -501,7 +549,10 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     for (NSDictionary *d in recents) {
         double la = [d[@"lat"] doubleValue];
         double ln = [d[@"lng"] doubleValue];
-        NSString *title = [NSString stringWithFormat:@"%.4f, %.4f", la, ln];
+        NSString *name = d[@"name"];
+        NSString *title = (name.length && ![name isEqualToString:@"(null)"])
+            ? name
+            : [NSString stringWithFormat:@"%.4f, %.4f", la, ln];
         [titles addObject:title];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
