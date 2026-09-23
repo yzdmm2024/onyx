@@ -1,4 +1,5 @@
 #import "ONYXAppsViewController.h"
+#import "ONYXPrefs.h"
 #import <objc/runtime.h>
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
@@ -179,14 +180,9 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.apps = [[self class] allApplications];
     self.filteredApps = self.apps;
 
-    // 关键修复：和 saveSelected 一样从 CFPreferences 读，而不是 NSUserDefaults
-    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    if (arr) {
-        self.selected = [NSMutableSet setWithArray:(__bridge NSArray *)arr];
-        CFRelease(arr);
-    } else {
-        self.selected = [NSMutableSet set];
-    }
+    // 与 saveSelected 一致，从统一 plist 读（Tweak 同路径），避免读不到选中列表
+    id arr = OnyxPrefsRead(@"SelectedApps");
+    self.selected = [arr isKindOfClass:[NSArray class]] ? [NSMutableSet setWithArray:arr] : [NSMutableSet set];
 }
 
 #pragma mark - data source
@@ -229,10 +225,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 - (void)saveSelected {
-    CFStringRef domain = CFSTR("com.yzdmm.onyx");
-    CFPreferencesSetValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected allObjects], domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
+    OnyxPrefsWrite(@"SelectedApps", [self.selected allObjects]);
 }
 
 - (void)clearTapped:(id)sender {

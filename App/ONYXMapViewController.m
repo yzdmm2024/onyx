@@ -5,6 +5,7 @@
 #import "ONYXHistoryViewController.h"
 #import "ONYXActiveAppsViewController.h"
 #import "ONYXLocationSimulator.h"
+#import "ONYXPrefs.h"
 #import <CoreLocation/CoreLocation.h>
 #import <math.h>
 
@@ -30,6 +31,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 @property (nonatomic, strong) UILabel *mapStatLabel;
 @property (nonatomic, strong) UISegmentedControl *recentControl;
 @property (nonatomic, strong) UIButton *historyButton;
+@property (nonatomic, strong) NSLayoutConstraint *sheetBottomInset; // 键盘弹起时抬升 sheet
 @property (nonatomic, copy) NSString *placeName;
 
 @property (nonatomic, assign) CLLocationCoordinate2D currentCoord; // 恒为 WGS-84（与 CGCS2000 数值一致）
@@ -75,18 +77,26 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)keyboardWillShow:(NSNotification *)note {
-    CGRect rect = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    CGFloat h = rect.size.height;
-    self.sheet.contentInset = UIEdgeInsetsMake(0, 0, h, 0);
-    self.sheet.scrollIndicatorInsets = self.sheet.contentInset;
-    // 把输入框滚到键盘上方，避免被遮挡看不到输入的文字
-    CGRect f = [self.quickField convertRect:self.quickField.bounds toView:self.sheet];
-    [self.sheet scrollRectToVisible:CGRectInset(f, 0, -16) animated:YES];
+    CGRect kbFrame = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    // 统一换算到 self.view 坐标系（适配横竖屏）
+    CGRect kbInView = [self.view convertRect:kbFrame fromView:nil];
+    CGFloat h = CGRectGetHeight(kbInView);
+    self.sheetBottomInset.constant = -h; // 抬升 sheet 底部到键盘上方
+    [UIView animateWithDuration:0.25 animations:^{
+        [self.view layoutIfNeeded];
+        // 把正在输入的快速定位框滚到可见区域
+        if (self.quickField.isFirstResponder) {
+            CGRect f = [self.quickField convertRect:self.quickField.bounds toView:self.sheet];
+            [self.sheet scrollRectToVisible:CGRectInset(f, 0, -20) animated:YES];
+        }
+    }];
 }
 
 - (void)keyboardWillHide:(NSNotification *)note {
-    self.sheet.contentInset = UIEdgeInsetsZero;
-    self.sheet.scrollIndicatorInsets = UIEdgeInsetsZero;
+    self.sheetBottomInset.constant = 0;
+    [UIView animateWithDuration:0.25 animations:^{
+        [self.view layoutIfNeeded];
+    }];
 }
 
 - (void)onyxMemoryChanged {
@@ -197,11 +207,14 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.sheetContent.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sheet addSubview:self.sheetContent];
 
+    // sheet 底部约束存为属性，键盘弹起时抬升到键盘上方，避免遮挡快速定位输入
+    self.sheetBottomInset = [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
+
     [NSLayoutConstraint activateConstraints:@[
         [self.sheet.topAnchor constraintEqualToAnchor:self.statusBar.bottomAnchor constant:6],
         [self.sheet.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sheet.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.sheet.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        self.sheetBottomInset,
 
         [self.sheetContent.topAnchor constraintEqualToAnchor:self.sheet.topAnchor],
         [self.sheetContent.leadingAnchor constraintEqualToAnchor:self.sheet.leadingAnchor],
@@ -356,34 +369,24 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 #pragma mark - State
 
 - (void)loadState {
-    CFStringRef domain = CFSTR("com.yzdmm.onyx");
-    CFPropertyListRef lat = CFPreferencesCopyValue(CFSTR("Latitude"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPropertyListRef lng = CFPreferencesCopyValue(CFSTR("Longitude"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPropertyListRef en = CFPreferencesCopyValue(CFSTR("enabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPropertyListRef mem = CFPreferencesCopyValue(CFSTR("MemoryEnabled"), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    BOOL memory = mem ? [(__bridge NSNumber *)mem boolValue] : YES; // 默认开启记忆
-    if (lat && lng) {
-        double la = [(__bridge NSNumber *)lat doubleValue];
-        double ln = [(__bridge NSNumber *)lng doubleValue];
-        self.currentCoord = CLLocationCoordinate2DMake(la, ln);
+    id latObj = OnyxPrefsRead(@"Latitude");
+    id lngObj = OnyxPrefsRead(@"Longitude");
+    id enObj = OnyxPrefsRead(@"enabled");
+    id memObj = OnyxPrefsRead(@"MemoryEnabled");
+    BOOL memory = [memObj boolValue] ?: YES; // 默认开启记忆
+    if ([latObj isKindOfClass:[NSNumber class]] && [lngObj isKindOfClass:[NSNumber class]]) {
+        self.currentCoord = CLLocationCoordinate2DMake([latObj doubleValue], [lngObj doubleValue]);
     }
-    if (mem) CFRelease(mem);
     // 记忆开启：恢复上次模拟状态；关闭：每次进入都停止模拟
-    if (en) self.running = memory ? [(__bridge NSNumber *)en boolValue] : NO;
-    if (lat) CFRelease(lat);
-    if (lng) CFRelease(lng);
-    if (en) CFRelease(en);
+    if (enObj) self.running = memory ? [enObj boolValue] : NO;
     [self updateStatus];
     [self loadRecent];
 }
 
 - (void)saveState {
-    CFStringRef domain = CFSTR("com.yzdmm.onyx");
-    CFPreferencesSetValue(CFSTR("Latitude"), (__bridge CFNumberRef)@(self.currentCoord.latitude), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSetValue(CFSTR("Longitude"), (__bridge CFNumberRef)@(self.currentCoord.longitude), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSetValue(CFSTR("enabled"), (__bridge CFNumberRef)@(self.running), domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
+    OnyxPrefsWrite(@"Latitude", @(self.currentCoord.latitude));
+    OnyxPrefsWrite(@"Longitude", @(self.currentCoord.longitude));
+    OnyxPrefsWrite(@"enabled", @(self.running));
     [self saveRecent];
 }
 
@@ -401,12 +404,8 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)refreshStatusPanel {
-    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    NSInteger count = 0;
-    if (arr) {
-        count = [(__bridge NSArray *)arr count];
-        CFRelease(arr);
-    }
+    id arr = OnyxPrefsRead(@"SelectedApps");
+    NSInteger count = [arr isKindOfClass:[NSArray class]] ? [(NSArray *)arr count] : 0;
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     fmt.dateFormat = @"HH:mm:ss";
     NSString *time = [fmt stringFromDate:[NSDate date]];
@@ -478,9 +477,8 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         if (!s) return;
         [s refreshStatusPanel];
         // 若已全部移除，自动停止模拟
-        CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-        NSInteger cnt = 0;
-        if (arr) { cnt = [(__bridge NSArray *)arr count]; CFRelease(arr); }
+        id arrRead = OnyxPrefsRead(@"SelectedApps");
+        NSInteger cnt = [arrRead isKindOfClass:[NSArray class]] ? [(NSArray *)arrRead count] : 0;
         if (cnt == 0) {
             s.running = NO;
             [s saveState];

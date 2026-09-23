@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.6
+Version: 0.5.7
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.6 修复（关键）：Tweak 改为直接读取 plist 文件（绕过 cfprefsd 在 rootless/RootHide 下跨进程读不到偏好的问题），并每秒自动重读一次实现配置自愈，选中 App 立即生效。v0.5.4 修复：选中应用未立即生效（实时读取配置、配置变更即主动推送假坐标）、快速定位输入框被键盘遮挡；历史记录底部新增「记忆功能」开关。v0.5.2 起按 App 生效：仅「应用列表」勾选的 App 收假坐标；App 内「恢复」按钮一键回到真实位置。独立面板：自绘瓦片地图选点、搜索、历史记录、应用列表、运行中应用管理。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.5.7 修复（关键）：统一 App 端与 Tweak 的配置读写——App 写配置时同步直写同一份 plist 文件（rootless 与标准路径都写），与 Tweak 直接读 plist 完全一致，彻底解决跨进程隔离导致「定位失效 / 勾选 App 不生效仍停在原地」；修复快速定位输入框被系统键盘遮挡看不到正在输入的文字（键盘弹起时自动抬升面板并滚到输入框）。v0.5.6 Tweak 改为直接读 plist 文件并按秒自愈重读；v0.5.4 起实时读取、选中 App 立即生效，历史记录下单记忆功能开关。v0.5.2 起仅勾选的 App 收假坐标，App 内「恢复」按钮一键回到真实位置。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。

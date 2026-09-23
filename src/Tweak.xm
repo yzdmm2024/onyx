@@ -46,6 +46,8 @@ static NSDictionary *_onyxLoadPlist(void) {
     NSArray<NSString *> *cands = @[
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
+        @"/var/jb/mobile/Library/Preferences/com.yzdmm.onyx.plist",
+        @"/var/jb/var/root/Library/Preferences/com.yzdmm.onyx.plist",
     ];
     for (NSString *p in cands) {
         NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];

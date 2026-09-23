@@ -1,5 +1,6 @@
 #import "ONYXActiveAppsViewController.h"
 #import "ONYXAppsViewController.h"
+#import "ONYXPrefs.h"
 
 @interface ONYXAAAppCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *iconView;
@@ -92,12 +93,8 @@
 
 - (void)loadSelected {
     NSArray *all = [self.class allApplications];
-    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), CFSTR("com.yzdmm.onyx"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    NSArray *bids = nil;
-    if (arr) {
-        bids = (__bridge NSArray *)arr;
-        CFRelease(arr);
-    }
+    id arr = OnyxPrefsRead(@"SelectedApps");
+    NSArray *bids = [arr isKindOfClass:[NSArray class]] ? arr : nil;
     NSMutableArray *ordered = [NSMutableArray array];
     for (NSString *bid in bids) {
         NSDictionary *match = nil;
@@ -157,10 +154,7 @@
     NSString *bid = self.selected[index];
     [self.selected removeObjectAtIndex:index];
 
-    CFStringRef domain = CFSTR("com.yzdmm.onyx");
-    CFPreferencesSetValue(CFSTR("SelectedApps"), (__bridge CFArrayRef)[self.selected copy], domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
+    OnyxPrefsWrite(@"SelectedApps", [self.selected copy]);
 
     if (self.onRemove) self.onRemove();
 }
