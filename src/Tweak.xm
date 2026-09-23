@@ -32,13 +32,14 @@
 static NSString *const kDomain  = @"com.yzdmm.onyx";
 #define kDomainCF CFSTR("com.yzdmm.onyx")
 static NSString *const kChanged = @"com.yzdmm.onyx/changed";
+static NSHashTable<CLLocationManager *> *s_mgrs = nil;
 
 static double s_lat = 0, s_lng = 0;
 static BOOL s_hasCoord = NO;
 static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_selectedApps = nil;
 
-static void _reload(void) {
+static void _readPrefs(void) {
     CFPropertyListRef e = CFPreferencesCopyAppValue(CFSTR("enabled"), kDomainCF);
     s_enabled = e ? [(__bridge NSNumber *)e boolValue] : NO;
     if (e) CFRelease(e);
@@ -63,6 +64,7 @@ static void _reload(void) {
 }
 
 static BOOL _active(void) {
+    _readPrefs();
     if (!s_enabled || !s_hasCoord) return NO;
     NSString *bid = NSBundle.mainBundle.bundleIdentifier;
     if (!bid.length) return NO;
@@ -91,7 +93,16 @@ static void _pushToDelegate(CLLocationManager *mgr) {
 }
 
 static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
-    _reload();
+    _readPrefs();
+    // 配置变化后立即给本进程内存活的所有 CLLocationManager 推一次假坐标，
+    // 让「选中的应用」立刻生效，无需等下一次位置请求。
+    if (s_enabled && s_hasCoord) {
+        for (CLLocationManager *m in s_mgrs) {
+            if (m && [m respondsToSelector:@selector(_onyxFakePush)]) {
+                [m performSelector:@selector(_onyxFakePush)];
+            }
+        }
+    }
     NSLog(@"[Onyx] reloaded enabled=%d hasCoord=%d bid=%@ selected=%@", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier, s_selectedApps.allObjects);
 }
 
@@ -122,6 +133,15 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 %end
 
 %hook CLLocationManager
+- (instancetype)init {
+    instancetype m = %orig;
+    if (m && s_mgrs) [s_mgrs addObject:m];
+    return m;
+}
+- (void)dealloc {
+    if (s_mgrs) [s_mgrs removeObject:self];
+    %orig;
+}
 - (CLLocation *)location {
     if (_active()) {
         NSLog(@"[Onyx] hooked CLLocationManager.location -> %.6f,%.6f", s_lat, s_lng);
@@ -326,7 +346,8 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 %end
 
 %ctor {
-    _reload();
+    s_mgrs = [NSHashTable weakObjectsHashTable];
+    _readPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
         onChanged, (CFStringRef)kChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     %init(OnyxHooks);

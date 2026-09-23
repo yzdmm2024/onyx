@@ -58,6 +58,40 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self updateLabels];
     [self pushCurrentToMap:11];
     [self refreshStatusPanel];
+    [self setupKeyboardObservers];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onyxMemoryChanged)
+                                                 name:@"OnyxMemoryChanged"
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)setupKeyboardObservers {
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+}
+
+- (void)keyboardWillShow:(NSNotification *)note {
+    CGRect rect = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGFloat h = rect.size.height;
+    self.sheet.contentInset = UIEdgeInsetsMake(0, 0, h, 0);
+    self.sheet.scrollIndicatorInsets = self.sheet.contentInset;
+    // 把输入框滚到键盘上方，避免被遮挡看不到输入的文字
+    CGRect f = [self.quickField convertRect:self.quickField.bounds toView:self.sheet];
+    [self.sheet scrollRectToVisible:CGRectInset(f, 0, -16) animated:YES];
+}
+
+- (void)keyboardWillHide:(NSNotification *)note {
+    self.sheet.contentInset = UIEdgeInsetsZero;
+    self.sheet.scrollIndicatorInsets = UIEdgeInsetsZero;
+}
+
+- (void)onyxMemoryChanged {
+    [self loadState];
+    [self updateStatus];
 }
 
 #pragma mark - 坐标语义
@@ -325,12 +359,16 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     CFPropertyListRef lat = CFPreferencesCopyAppValue(CFSTR("Latitude"), CFSTR("com.yzdmm.onyx"));
     CFPropertyListRef lng = CFPreferencesCopyAppValue(CFSTR("Longitude"), CFSTR("com.yzdmm.onyx"));
     CFPropertyListRef en = CFPreferencesCopyAppValue(CFSTR("enabled"), CFSTR("com.yzdmm.onyx"));
+    CFPropertyListRef mem = CFPreferencesCopyAppValue(CFSTR("MemoryEnabled"), CFSTR("com.yzdmm.onyx"));
+    BOOL memory = mem ? [(__bridge NSNumber *)mem boolValue] : YES; // 默认开启记忆
     if (lat && lng) {
         double la = [(__bridge NSNumber *)lat doubleValue];
         double ln = [(__bridge NSNumber *)lng doubleValue];
         self.currentCoord = CLLocationCoordinate2DMake(la, ln);
     }
-    if (en) self.running = [(__bridge NSNumber *)en boolValue];
+    if (mem) CFRelease(mem);
+    // 记忆开启：恢复上次模拟状态；关闭：每次进入都停止模拟
+    if (en) self.running = memory ? [(__bridge NSNumber *)en boolValue] : NO;
     if (lat) CFRelease(lat);
     if (lng) CFRelease(lng);
     if (en) CFRelease(en);
