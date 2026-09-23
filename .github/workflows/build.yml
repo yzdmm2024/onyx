@@ -46,10 +46,11 @@ jobs:
           dpkg-deb -x packages/*.deb "$W/root"
           dpkg-deb -e packages/*.deb "$W/root/DEBIAN"
           sed -i '' 's/^Architecture:.*/Architecture: iphoneos-arm64e/' "$W/root/DEBIAN/control"
+          VERSION=$(grep '^Version:' "$W/root/DEBIAN/control" | sed 's/^Version: *//')
           echo "--- derived arm64e control ---"
           grep -E '^(Package|Architecture|Version):' "$W/root/DEBIAN/control"
-          # 另存派生 arm64e deb（Theos 已按 control Version 把 fat 包命名为 *_iphoneos-arm64.deb）
-          dpkg-deb -b "$W/root" "packages/com.yzdmm.onyx_0.5.1_iphoneos-arm64e.deb"
+          # 另存派生 arm64e deb（文件名使用 control 中的真实版本号）
+          dpkg-deb -b "$W/root" "packages/com.yzdmm.onyx_${VERSION}_iphoneos-arm64e.deb"
           echo "--- final packages ---"
           ls -la packages/
 
