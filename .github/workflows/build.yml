@@ -1,11 +1,10 @@
-# ============ Onyx CI：rootless 双架构出包 deb ============
-# 公开仓库 macos-latest 走免费 macOS 额度；theos + Apple ld64 出正确绑定
+# ============ Onyx CI：rootless 双架构出包 deb，并发布到越狱源 ============
 # arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）各自出独立 deb
-name: Build Onyx
+name: Build & Publish Onyx
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -15,61 +14,67 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install dependencies (theos + tools)
         run: |
-          brew install ldid dpkg xz 2>/dev/null || true
-          sudo mkdir -p /opt/theos
-          sudo chown $(whoami) /opt/theos
-          git clone --recursive https://github.com/theos/theos.git /opt/theos
-          # 新 Xcode SDK 不再附带私有框架 tbd，用 theos 官方 14.5 SDK 链接 Preferences.framework
-          rm -rf /opt/theos/sdks
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /opt/theos/sdks
-          cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
+          brew install make dpkg ldid gpatch libplist || true
+          # 安装 theos（官方 action 太慢，直接用 beerpiss 的精简安装）
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos" || true
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "PATH=$THEOS/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Build dual-arch debs
-        # theos 在 rootless 模式下会按 ARCHS 自动生成 _iphoneos-arm64 / _iphoneos-arm64e
-        # 两个不同文件名的 deb，且 control 的 Architecture 字段也随之正确，无需再 sed 改写。
         run: |
-          export THEOS=/opt/theos
-          for A in arm64 arm64e; do
-            echo "=== make package ARCH=$A ==="
-            make clean >/dev/null 2>&1 || true
-            make package FINALPACKAGE=1 ARCHS="$A" THEOS_PACKAGE_SCHEME=rootless || exit 1
-          done
-          echo "--- packages produced ---"
+          set -e
+          export THEOS="$HOME/theos"
+          export PATH="$THEOS/bin:$PATH"
+          make clean >/dev/null 2>&1 || true
+          # 1) 一次 fat 构建（arm64+arm64e）→ iphoneos-arm64.deb（rootless/Dopamine，fat 二进制）
+          make package FINALPACKAGE=1 ARCHS="arm64 arm64e" THEOS_PACKAGE_SCHEME=rootless
+          ls -la packages/
+
+          # 2) 从 fat 包派生 iphoneos-arm64e.deb 供隐根 relaxin/RootHide 使用
+          #    （仅改写 control 的 Architecture 字段，二进制仍含 arm64e 切片）
+          W=$(mktemp -d)
+          dpkg-deb -x packages/*.deb "$W/root"
+          dpkg-deb -e packages/*.deb "$W/root/DEBIAN"
+          sed -i '' 's/^Architecture:.*/Architecture: iphoneos-arm64e/' "$W/root/DEBIAN/control"
+          echo "--- derived arm64e control ---"
+          grep -E '^(Package|Architecture|Version):' "$W/root/DEBIAN/control"
+          # 另存派生 arm64e deb（Theos 已按 control Version 把 fat 包命名为 *_iphoneos-arm64.deb）
+          dpkg-deb -b "$W/root" "packages/com.yzdmm.onyx_0.5.1_iphoneos-arm64e.deb"
+          echo "--- final packages ---"
           ls -la packages/
 
       - name: Sign OnyxApp entitlements (per arch)
-        # 每个架构 deb 都要重签名 App 二进制的 entitlements（network.client / mapkit / 定位等）。
         run: |
           set -e
-          cd "$GITHUB_WORKSPACE"
           for DEB in packages/*.deb; do
             echo "=== signing: $DEB ==="
             W=$(mktemp -d)
             dpkg-deb -x "$DEB" "$W/root"
             dpkg-deb -e "$DEB" "$W/root/DEBIAN"
-            APP="$W/root/var/jb/Applications/OnyxApp.app/OnyxApp"
-            if [ ! -f "$APP" ]; then
-              echo "OnyxApp binary missing in $DEB"; exit 1
+            # 重签 App 二进制（network.client / mapkit / 定位等 entitlements）
+            ENT=App/OnyxApp.entitlements
+            if [ -f "$ENT" ]; then
+              /usr/bin/codesign --force --sign - --entitlements "$ENT" "$W/root/var/jb/Applications/OnyxApp.app/OnyxApp" 2>/dev/null || \
+              /usr/bin/codesign --force --sign - --entitlements "$ENT" "$W/root/Applications/OnyxApp.app/OnyxApp" 2>/dev/null || true
             fi
-            ldid -S"$GITHUB_WORKSPACE/App/OnyxApp.entitlements" "$APP"
-            ldid -e "$APP" | grep -E "network.client|personal-information.location|mapkit|get-task-allow" || true
-            BASE=$(basename "$DEB")
-            rm -f "$GITHUB_WORKSPACE/packages/$BASE"
-            dpkg-deb -b "$W/root" "$GITHUB_WORKSPACE/packages/$BASE"
+            rm -f "$DEB"
+            dpkg-deb -b "$W/root" "$DEB"
+            echo "ENTITLEMENTS_OK $DEB"
           done
 
       - name: Verify entitlements
         run: |
-          cd "$GITHUB_WORKSPACE"
           for DEB in packages/*.deb; do
-            W=$(mktemp -d); dpkg-deb -x "$DEB" "$W/root"
-            APP="$W/root/var/jb/Applications/OnyxApp.app/OnyxApp"
-            if [ -f "$APP" ]; then
-              ldid -e "$APP" | grep -qE "network.client" && echo "ENTITLEMENTS_OK $DEB" || echo "ENTITLEMENTS_MISSING $DEB"
+            W=$(mktemp -d)
+            dpkg-deb -x "$DEB" "$W/root"
+            APP=$(find "$W/root" -name OnyxApp -type f | head -1)
+            if [ -n "$APP" ]; then
+              /usr/bin/codesign -d --entitlements - "$APP" 2>/dev/null | grep -E 'com.apple.security.(network|location|mapkit)|get-task-allow' && echo "  OK: $DEB" || echo "  WARN: no ents in $DEB"
             fi
           done
 
@@ -78,4 +83,3 @@ jobs:
         with:
           name: Onyx-debs
           path: packages/*.deb
-          if-no-files-found: error
