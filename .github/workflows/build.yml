@@ -26,14 +26,30 @@ jobs:
           cd /opt/theos/sdks && git sparse-checkout set iPhoneOS14.5.sdk
 
       - name: Build package (all archs)
-        # theos 对多 ARCHS 默认只按第一个架构出包；这里分别按 arm64（无根）与
-        # arm64e（隐根）各 make package 一次，得到两个架构标签各自独立的 deb。
+        # 分别按 arm64（无根）与 arm64e（隐根）各 make package 一次。
+        # 坑H：rootless 模式会把包名锁定为 _iphoneos-arm64.deb，两轮产物同名互相覆盖，
+        #      只剩最后一轮；这里每轮立即按架构重命名 + 修正 control 的 Architecture 字段，
+        #      保证得到 iphoneos-arm64 与 iphoneos-arm64e 两个独立 deb。
         run: |
           export THEOS=/opt/theos
+          brew install dpkg 2>/dev/null || true
           for A in arm64 arm64e; do
             echo "=== make package ARCH=$A ==="
             make clean >/dev/null 2>&1 || true
             make package FINALPACKAGE=1 ARCHS="$A" THEOS_PACKAGE_SCHEME=rootless || exit 1
+            arch_label="iphoneos-$A"
+            W=/tmp/${A}_fix
+            rm -rf "$W" && mkdir -p "$W/root"
+            for DEB in packages/*.deb; do
+              [ -f "$DEB" ] || continue
+              echo "--- fixing arch of $DEB -> $arch_label ---"
+              dpkg-deb -x "$DEB" "$W/root"
+              dpkg-deb -e "$DEB" "$W/root/DEBIAN"
+              sed -i "s/^Architecture:.*/Architecture: $arch_label/" "$W/root/DEBIAN/control"
+              rm -f "$DEB"
+              dpkg-deb -b "$W/root" "packages/com.yzdmm.onyx_0.5.0_$arch_label.deb"
+              echo "wrote packages/com.yzdmm.onyx_0.5.0_$arch_label.deb"
+            done
           done
           echo "--- collected debs ---"
           ls -la packages/
