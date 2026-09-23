@@ -1,15 +1,12 @@
 #import "ONYXAMapView.h"
-#import "ONYXCoordTransform.h"
-#import <WebKit/WebKit.h>
+#import <math.h>
 
-static NSString *const kAMapKey = @"5357b002dca4cb8dd1046539e3cae85a";
-static NSString *const kHandlerName = @"onyx";
-
-@interface ONYXAMapView () <WKScriptMessageHandler, WKNavigationDelegate>
-@property (nonatomic, strong) WKWebView *webView;
-@property (nonatomic, strong) UIButton *retryButton;
-@property (nonatomic, strong) UILabel *statusLabel;
-@property (nonatomic, assign) BOOL loaded;
+// 坐标语义：MKMapView 使用 WGS-84，直接使用面板内部 currentCoord，无需像高德那样转 GCJ-02。
+@interface ONYXAMapView () <MKMapViewDelegate>
+@property (nonatomic, strong) MKMapView *mapView;
+@property (nonatomic, strong) MKPointAnnotation *marker;
+@property (nonatomic, strong) CLLocationManager *locationManager;
+@property (nonatomic, assign) CLLocationCoordinate2D lastUserCoordinate;
 @end
 
 @implementation ONYXAMapView
@@ -17,161 +14,118 @@ static NSString *const kHandlerName = @"onyx";
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        _loaded = NO;
-        [self setupWebView];
-        [self setupOverlay];
-        [self loadMapHTML];
+        [self setupMap];
     }
     return self;
 }
 
-- (void)setupWebView {
-    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
-    cfg.allowsInlineMediaPlayback = YES;
-    cfg.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
-
-    WKUserContentController *uc = cfg.userContentController;
-    [uc addScriptMessageHandler:self name:kHandlerName];
-
-    _webView = [[WKWebView alloc] initWithFrame:self.bounds configuration:cfg];
-    _webView.translatesAutoresizingMaskIntoConstraints = NO;
-    _webView.navigationDelegate = self;
-    _webView.backgroundColor = [UIColor colorWithRed:0.92 green:0.94 blue:0.97 alpha:1.0];
-    _webView.opaque = NO;
-    [self addSubview:_webView];
+- (void)setupMap {
+    _mapView = [[MKMapView alloc] initWithFrame:self.bounds];
+    _mapView.translatesAutoresizingMaskIntoConstraints = NO;
+    _mapView.delegate = self;
+    _mapView.showsUserLocation = YES; // 蓝点跟随系统定位：开始模拟后跳出到目标点 = 修改成功
+    _mapView.showsCompass = YES;
+    _mapView.showsScale = YES;
+    [self addSubview:_mapView];
 
     [NSLayoutConstraint activateConstraints:@[
-        [_webView.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [_webView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [_webView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_webView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
+        [_mapView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_mapView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_mapView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [_mapView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
     ]];
-}
 
-- (void)setupOverlay {
-    _statusLabel = [[UILabel alloc] init];
-    _statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _statusLabel.font = [UIFont systemFontOfSize:12];
-    _statusLabel.textColor = [UIColor labelColor];
-    _statusLabel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.85];
-    _statusLabel.layer.cornerRadius = 6;
-    _statusLabel.clipsToBounds = YES;
-    _statusLabel.text = @"地图加载中…";
-    _statusLabel.textAlignment = NSTextAlignmentCenter;
-    [self addSubview:_statusLabel];
+    // 首次请求定位权限，保证蓝点可显示
+    _locationManager = [[CLLocationManager alloc] init];
+    [_locationManager requestWhenInUseAuthorization];
 
-    _retryButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _retryButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_retryButton setTitle:@"重新加载地图" forState:UIControlStateNormal];
-    [_retryButton addTarget:self action:@selector(retryTapped:) forControlEvents:UIControlEventTouchUpInside];
-    _retryButton.hidden = YES;
-    [self addSubview:_retryButton];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
+    [_mapView addGestureRecognizer:tap];
 
-    [NSLayoutConstraint activateConstraints:@[
-        [_statusLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
-        [_statusLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-10],
-        [_statusLabel.widthAnchor constraintEqualToConstant:120],
-        [_statusLabel.heightAnchor constraintEqualToConstant:24],
-
-        [_retryButton.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [_retryButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor]
-    ]];
-}
-
-- (void)loadMapHTML {
-    NSURL *htmlURL = [[NSBundle mainBundle] URLForResource:@"amap" withExtension:@"html"];
-    if (!htmlURL) {
-        [self fail:@"本地地图资源缺失（amap.html）"];
-        return;
-    }
-    NSString *html = [NSString stringWithContentsOfURL:htmlURL encoding:NSUTF8StringEncoding error:nil];
-    if (!html) {
-        [self fail:@"地图资源读取失败"];
-        return;
-    }
-    html = [html stringByReplacingOccurrencesOfString:@"__AMAP_KEY__" withString:kAMapKey];
-    NSURL *baseURL = [htmlURL URLByDeletingLastPathComponent];
-    [_webView loadHTMLString:html baseURL:baseURL];
-}
-
-- (void)retryTapped:(UIButton *)sender {
-    _retryButton.hidden = YES;
-    _statusLabel.text = @"地图加载中…";
-    [self loadMapHTML];
-}
-
-- (void)fail:(NSString *)msg {
-    _statusLabel.text = msg;
-    _retryButton.hidden = NO;
-    _loaded = NO;
-    if ([self.delegate respondsToSelector:@selector(amapView:didFailWithError:)]) {
-        [self.delegate amapView:self didFailWithError:msg];
-    }
-}
-
-#pragma mark - WKNavigationDelegate
-
-- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    _statusLabel.text = @"地图就绪";
-    _loaded = YES;
+    _lastUserCoordinate = kCLLocationCoordinate2DInvalid;
     if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-        [self.delegate amapView:self didUpdateStatus:@"地图已加载"];
+        [self.delegate amapView:self didUpdateStatus:@"地图就绪"];
     }
 }
 
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    [self fail:[NSString stringWithFormat:@"地图加载失败: %@", error.localizedDescription]];
-}
+#pragma mark - 交互
 
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    [self fail:[NSString stringWithFormat:@"地图初始化失败: %@", error.localizedDescription]];
-}
-
-#pragma mark - WKScriptMessageHandler
-
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    if (![message.name isEqualToString:kHandlerName]) return;
-    NSDictionary *body = message.body;
-    if (![body isKindOfClass:[NSDictionary class]]) return;
-    NSString *type = body[@"type"];
-    if ([type isEqualToString:@"tap"]) {
-        double lat = [body[@"lat"] doubleValue];
-        double lng = [body[@"lng"] doubleValue];
-        CLLocationCoordinate2D gcj = CLLocationCoordinate2DMake(lat, lng);
-        CLLocationCoordinate2D wgs = [ONYXCoordTransform wgs84FromGcj02:gcj];
-        if ([self.delegate respondsToSelector:@selector(amapView:didPickCoordinate:)]) {
-            [self.delegate amapView:self didPickCoordinate:wgs];
-        }
-    } else if ([type isEqualToString:@"log"]) {
-        NSString *txt = body[@"text"];
-        NSLog(@"[OnyxAMapJS] %@", txt);
-    } else if ([type isEqualToString:@"error"]) {
-        [self fail:body[@"text"] ?: @"地图脚本错误"];
+- (void)handleTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    CGPoint pt = [g locationInView:_mapView];
+    CLLocationCoordinate2D coord = [_mapView convertPoint:pt toCoordinateFromView:_mapView];
+    [self placeMarkerAt:coord];
+    if ([self.delegate respondsToSelector:@selector(amapView:didPickCoordinate:)]) {
+        [self.delegate amapView:self didPickCoordinate:coord];
     }
+}
+
+- (void)placeMarkerAt:(CLLocationCoordinate2D)coord {
+    if (!CLLocationCoordinate2DIsValid(coord)) return;
+    if (self.marker) {
+        _marker.coordinate = coord;
+    } else {
+        _marker = [[MKPointAnnotation alloc] init];
+        _marker.coordinate = coord;
+        _marker.title = @"模拟位置";
+        [_mapView addAnnotation:_marker];
+    }
+}
+
+// zoom(3~18) → 跨度数，越大越精细
+- (CLLocationDegrees)latitudeDeltaForZoom:(NSInteger)zoom {
+    double z = MAX(3, MIN(18, zoom));
+    return 170.0 / pow(2.0, z - 3.0);
+}
+
+#pragma mark - MKMapViewDelegate
+
+- (void)mapView:(MKMapView *)mapView didUpdateUserLocation:(MKUserLocation *)userLocation {
+    CLLocationCoordinate2D c = userLocation.coordinate;
+    if (!CLLocationCoordinate2DIsValid(c)) return;
+    // 跟随蓝点：初始或发生明显跳变（开始模拟/切换坐标）时把地图平移到蓝点，
+    // 即可直接看到模拟是否生效；静止时不打扰用户平移浏览。
+    BOOL first = !CLLocationCoordinate2DIsValid(_lastUserCoordinate);
+    CLLocationDistance moved = 0;
+    if (!first) {
+        CLLocation *last = [[CLLocation alloc] initWithCoordinate:_lastUserCoordinate
+                                                         altitude:0 horizontalAccuracy:0 verticalAccuracy:0 timestamp:nil];
+        moved = [userLocation.location distanceFromLocation:last];
+    }
+    if (first || moved > 50) {
+        [_mapView setCenterCoordinate:c animated:YES];
+    }
+    _lastUserCoordinate = c;
 }
 
 #pragma mark - public
 
 - (void)setCenterCoordinate:(CLLocationCoordinate2D)coord zoom:(NSInteger)zoom showMarker:(BOOL)showMarker {
-    if (!_loaded || !CLLocationCoordinate2DIsValid(coord)) return;
-    CLLocationCoordinate2D gcj = [ONYXCoordTransform gcj02FromWgs84:coord];
-    NSString *script = [NSString stringWithFormat:@"setCenter(%.6f, %.6f, %ld, %@);",
-                          gcj.longitude, gcj.latitude, (long)zoom, showMarker ? @"true" : @"false"];
-    [_webView evaluateJavaScript:script completionHandler:nil];
+    if (!CLLocationCoordinate2DIsValid(coord)) return;
+    if (zoom >= 3) {
+        CLLocationDegrees d = [self latitudeDeltaForZoom:zoom];
+        MKCoordinateRegion region = MKCoordinateRegionMake(coord, MKCoordinateSpanMake(d, d));
+        [_mapView setRegion:region animated:YES];
+    } else {
+        [_mapView setCenterCoordinate:coord animated:YES];
+    }
+    if (showMarker) [self placeMarkerAt:coord];
 }
 
 - (void)setMarkerCoordinate:(CLLocationCoordinate2D)coord {
-    if (!_loaded || !CLLocationCoordinate2DIsValid(coord)) return;
-    CLLocationCoordinate2D gcj = [ONYXCoordTransform gcj02FromWgs84:coord];
-    NSString *script = [NSString stringWithFormat:@"setMarker(%.6f, %.6f);", gcj.longitude, gcj.latitude];
-    [_webView evaluateJavaScript:script completionHandler:nil];
+    [self placeMarkerAt:coord];
 }
 
-- (void)zoomIn { [_webView evaluateJavaScript:@"zoomIn()" completionHandler:nil]; }
-- (void)zoomOut { [_webView evaluateJavaScript:@"zoomOut()" completionHandler:nil]; }
+- (void)zoomIn {
+    MKCoordinateRegion r = _mapView.region;
+    MKCoordinateSpan s = MKCoordinateSpanMake(r.span.latitudeDelta * 0.5, r.span.longitudeDelta * 0.5);
+    [_mapView setRegion:MKCoordinateRegionMake(r.center, s) animated:YES];
+}
 
-- (void)dealloc {
-    [_webView.configuration.userContentController removeScriptMessageHandlerForName:kHandlerName];
+- (void)zoomOut {
+    MKCoordinateRegion r = _mapView.region;
+    MKCoordinateSpan s = MKCoordinateSpanMake(r.span.latitudeDelta * 2.0, r.span.longitudeDelta * 2.0);
+    [_mapView setRegion:MKCoordinateRegionMake(r.center, s) animated:YES];
 }
 
 @end

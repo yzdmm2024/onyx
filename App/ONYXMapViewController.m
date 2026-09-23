@@ -69,7 +69,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     [self.view addSubview:self.searchBar];
 
-    // 高德 JS 地图（WebView），用户提供了 key
+    // 原生苹果地图（MKMapView），坐标为 WGS-84，与内部 currentCoord 一致
     self.amapView = [[ONYXAMapView alloc] initWithFrame:CGRectZero];
     self.amapView.translatesAutoresizingMaskIntoConstraints = NO;
     self.amapView.delegate = self;
