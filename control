@@ -6,4 +6,4 @@ Depends: firmware (>= 16.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
 Section: Tweaks
-Description: 系统级定位模拟，通过 CLSimulationManager + com.apple.locationd.simulation 私有 entitlement 向 locationd 注入坐标，全局影响所有 App。独立 App 面板：自绘高德瓦片地图选点、搜索、应用列表（搜索/图标/一键清除）、状态面板。v0.3.6 修复越狱平台 App 下瓦片无法下载的问题（NSURLSession sharedSession + HTTPS/HTTP 自动降级 + 增强 entitlement）。rootless 适配，A12+。
+Description: 系统级定位模拟，通过 CLSimulationManager + com.apple.locationd.simulation 私有 entitlement 向 locationd 注入坐标，全局影响所有 App。独立 App 面板：自绘高德瓦片地图选点、搜索、应用列表（搜索/图标/一键清除）、状态面板。v0.3.7 修复越狱 App 无法联网导致瓦片下载失败的问题（移除 platform-application，networkd 不再拦截；保留 locationd.simulation 等 entitlement）。rootless 适配，A12+。

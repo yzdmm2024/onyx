@@ -354,8 +354,16 @@ static UIImage *onyx_pinImage(void) {
 - (void)tileLoadFailed {
     if (_reportedFail) return;
     _reportedFail = YES;
+    NSString *msg;
+    if (_lastError) {
+        msg = [NSString stringWithFormat:@"瓦片加载失败 %@(%ld)", _lastError.domain, (long)_lastError.code];
+    } else if (_tileOkCount > 0) {
+        msg = @"部分瓦片加载失败";
+    } else {
+        msg = @"瓦片加载失败(无网络?)";
+    }
     if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-        [self.delegate amapView:self didUpdateStatus:@"瓦片加载失败(联网?)"];
+        [self.delegate amapView:self didUpdateStatus:msg];
     }
 }
 

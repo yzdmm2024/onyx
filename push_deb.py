@@ -128,9 +128,20 @@ def main():
     pkgs_utf8 = new_pkgs.encode("utf-8")
     gz = gzip.compress(pkgs_utf8, 9)
     bz = bz2.compress(pkgs_utf8, 9)
-    release = gh("repositories/%s/contents/Release?ref=main" % _repo_id(), raw=True)
-    head = re.sub(r"^(Date:.*)$", "Date: " + formatdate(usegmt=True), release, count=1, flags=re.M)
-    head = re.split(r"^MD5Sum:$", head, 1, flags=re.M)[0].rstrip() + "\n"
+    # 每次发布都重写标准 Release 头（源名称/架构/版本），不再沿用旧头，
+    # 解决 Sileo “Didn't find available architectures” 警告 + 源名称显示为 GitHub 用户名的问题。
+    now = formatdate(usegmt=True)
+    head = (
+        "Origin: Onyx\n"
+        "Label: Onyx\n"
+        "Suite: stable\n"
+        "Codename: stable\n"
+        "Version: 1.0\n"
+        "Architectures: iphoneos-arm64\n"
+        "Components: main\n"
+        "Description: Onyx 越狱插件源（定位模拟等）\n"
+        "Date: %s\n" % now
+    )
     bm5, bs1, bs256 = [], [], []
     for name, data in (("Packages", pkgs_utf8), ("Packages.gz", gz), ("Packages.bz2", bz)):
         bm5.append(" %s %d %s" % (hashlib.md5(data).hexdigest(), len(data), name))
