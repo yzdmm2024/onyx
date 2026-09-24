@@ -121,11 +121,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
                                                               style:UIBarButtonItemStylePlain
                                                              target:self
                                                              action:@selector(restoreTapped:)];
-    UIBarButtonItem *apps = [[UIBarButtonItem alloc] initWithTitle:@"应用"
-                                                             style:UIBarButtonItemStylePlain
-                                                            target:self
-                                                            action:@selector(openAppsList:)];
-    self.navigationItem.rightBarButtonItems = @[apps, restore, refresh];
+    self.navigationItem.rightBarButtonItems = @[restore, refresh];
 }
 
 // 手动刷新地图瓦片（网络变化如刚开 VPN 后，无需杀掉 App 重开）
@@ -158,9 +154,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     self.statusBar.clipsToBounds = YES;
     self.statusBar.textAlignment = NSTextAlignmentCenter;
     self.statusBar.text = @"未启用";
-    self.statusBar.userInteractionEnabled = YES;
-    UITapGestureRecognizer *stTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeAppsTapped:)];
-    [self.statusBar addGestureRecognizer:stTap];
+    self.statusBar.userInteractionEnabled = NO;
     [self.view addSubview:self.statusBar];
 
     // 地图状态标签
@@ -413,14 +407,10 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)refreshStatusPanel {
-    id arr = OnyxPrefsRead(@"ExcludedApps");
-    NSInteger count = [arr isKindOfClass:[NSArray class]] ? [(NSArray *)arr count] : 0;
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     fmt.dateFormat = @"HH:mm:ss";
     NSString *time = [fmt stringFromDate:[NSDate date]];
-    self.statusBar.text = self.running
-        ? [NSString stringWithFormat:@"运行中 · 已排除 %ld", (long)count]
-        : @"未启用";
+    self.statusBar.text = self.running ? @"运行中 · 全局" : @"未启用";
 }
 
 - (void)placePinAt:(CLLocationCoordinate2D)coord {
@@ -436,7 +426,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self saveState];
     [self notifyTweak];
     [self updateStatus];
-    NSString *msg = @"已启用模拟。所有被注入的 App 默认都会收到所选坐标。在「排除应用（黑名单）」中勾选的 App 仍使用真实位置。";
+    NSString *msg = @"已启用模拟。系统全局生效，所有 App 都会使用所选位置。";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
