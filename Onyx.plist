@@ -4,12 +4,60 @@
 <dict>
     <key>Filter</key>
     <dict>
-        <!-- 只注入 SpringBoard：
-             - CLSimulationManager 系统级定位模拟，全局生效
-             - 瓦片代拉代理（SpringBoard 是 platformized 可联网进程）
-             不注入任何用户 App，避免被钉钉等反作弊扫描到异常 dylib。 -->
-        <key>Executable</key>
-        <string>SpringBoard</string>
+        <!-- 白名单注入：只注入列表中的进程，钉钉等不在列表 → 完全不注入 → 检测不到 -->
+        <key>Bundles</key>
+        <array>
+            <!-- 系统进程：瓦片代拉在 SpringBoard 里运行 -->
+            <string>com.apple.springboard</string>
+            <!-- OnyxApp 自身 -->
+            <string>com.yzdmm.onyx.app</string>
+            <!-- 地图类 -->
+            <string>com.baidu.map</string>
+            <string>com.autonavi.amap</string>
+            <string>com.autonavi.autonavi</string>
+            <string>com.tencent.map</string>
+            <!-- 社交/通讯 -->
+            <string>com.tencent.xin</string>
+            <string>com.tencent.mqq</string>
+            <string>com.sina.weibo</string>
+            <string>com.xingin.discover</string>
+            <string>com.ss.iphone.ugc.Aweme</string>
+            <string>com.kuaishou.kuaishou</string>
+            <string>tv.danmaku.bilibilihd</string>
+            <string>com.baidu.tieba</string>
+            <string>com.zhihu.ios</string>
+            <string>com.p1.mobile.tantan</string>
+            <string>com.immomo.momo</string>
+            <string>com.soulapp.cn</string>
+            <!-- 生活/外卖 -->
+            <string>com.meituan.imeituan</string>
+            <string>me.ele.ios.eleme</string>
+            <string>com.dianping.dpscope</string>
+            <!-- 电商 -->
+            <string>com.taobao.taobao</string>
+            <string>com.jingdong.app.mall</string>
+            <string>com.xunmeng.pinduoduo</string>
+            <!-- 出行/打车 -->
+            <string>com.xiaojukeji.didi</string>
+            <string>com.caocaokeji.cao</string>
+            <string>com.t3go.app</string>
+            <string>com.huaxiaozhu.ride</string>
+            <string>com.jingyao.hello</string>
+            <!-- 旅游 -->
+            <string>com.ctrip.ctrip</string>
+            <string>com.taobao.trip</string>
+            <string>com.qunar.iphone</string>
+            <string>com.mfw.roadbook</string>
+            <!-- 办公/企业（打卡类不放：钉钉/企业微信/飞书，避免被检测） -->
+            <string>com.alibaba.aliyun</string>
+            <!-- 视频/音乐 -->
+            <string>com.youku.youku</string>
+            <string>com.iqiyi.player</string>
+            <string>com.tencent.qqmusic</string>
+            <string>com.netease.cloudmusic</string>
+            <!-- 浏览器 -->
+            <string>com.apple.mobilesafari</string>
+        </array>
     </dict>
 </dict>
 </plist>
