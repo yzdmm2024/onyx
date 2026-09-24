@@ -1,4 +1,4 @@
-#import "ONYXAMapView.h"
+﻿#import "ONYXAMapView.h"
 #import "ONYXCoordTransform.h"
 #import <math.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -112,6 +112,10 @@ static UIImage *onyx_pinImage(void) {
 @property (nonatomic, assign) CGFloat selfScale;
 @end
 
+// Darwin 通知回调：daemon 完成瓦片代拉后通知 App 去读共享缓存
+static void ONYXAMapViewTileOK(CFNotificationCenterRef center, void *observer,
+                                CFStringRef name, const void *object, CFDictionaryRef userInfo);
+
 @implementation ONYXAMapView
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -208,12 +212,11 @@ static UIImage *onyx_pinImage(void) {
     dbl.delegate = self;
     [self addGestureRecognizer:dbl];
 
-    // 监听代拉瓦片结果（注入进程下载完成后发 Darwin 通知）
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
-        ^(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u){
-            __typeof(self) me = (__bridge id)o;
-            [me handleProxyResult];
-        },
+    // 监听代拉瓦片结果（daemon 下载完成后发 Darwin 通知）
+    // 注意：CFNotificationCenterAddObserver 只接受 C 函数指针，observer 参数传 self 作为上下文
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+        (__bridge const void *)self,
+        ONYXAMapViewTileOK,
         CFSTR("com.yzdmm.onyx/tileok"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
     UILongPressGestureRecognizer *longp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
@@ -943,3 +946,9 @@ static void CGContextRoundRect(CGContextRef ctx, CGRect rect, CGFloat radius) {
 }
 
 @end
+// Darwin 通知回调：daemon 完成瓦片代拉
+static void ONYXAMapViewTileOK(CFNotificationCenterRef center, void *observer,
+                                CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    ONYXAMapView *mapView = (__bridge ONYXAMapView *)observer;
+    [mapView handleProxyResult];
+}
