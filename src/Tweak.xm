@@ -27,6 +27,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <mach-o/dyld.h>
 #import <fcntl.h>
 #import <unistd.h>
 #import <stdarg.h>
