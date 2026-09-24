@@ -275,8 +275,14 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
 }
 %end
 %hook BMKLocation
-- (CLLocationCoordinate2D)coordinate { if (_active()) return _fakeCoord(); return %orig; }
-- (CLLocation *)location { if (_active()) return _fakeLocation(); return %orig; }
+- (CLLocationCoordinate2D)coordinate {
+    if (_active()) return _fakeCoord();
+    return %orig;
+}
+- (CLLocation *)location {
+    if (_active()) return _fakeLocation();
+    return %orig;
+}
 %end
 %end
 
@@ -306,7 +312,10 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
 }
 %end
 %hook AMapLocation
-- (CLLocationCoordinate2D)coordinate { if (_active()) return _fakeCoord(); return %orig; }
+- (CLLocationCoordinate2D)coordinate {
+    if (_active()) return _fakeCoord();
+    return %orig;
+}
 %end
 %end
 
