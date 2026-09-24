@@ -1,26 +1,26 @@
-// Onyx Tweak v1.2.0
+// Onyx Tweak v1.3.0
 //
-// 定位模拟（per-app 直注）：
-//   ★v1.2.0 关键修正：不再「保留真实定位 + 额外推一帧假坐标」。
-//     旧版 startUpdatingLocation 先 %orig（真的启动 GPS），再推假坐标，
-//     结果 App 的 delegate 同时收到真/假两帧，真实那帧后到 → 覆盖假坐标，
-//     表现为「改了定位 App 还是显示真实位置」。
-//   v1.2.0 改为：启用时【完全不启动真实定位】，接管 delegate 回调直接替换坐标。
+// 定位模拟：★以 SpringBoard 系统级模拟为主（v1.3.0 方向调整）
 //
-// 覆盖路径：
-//   1) delegate 回调 locationManager:didUpdateLocations: —— 运行时扫描全类替换坐标（最关键）
-//   2) CLLocationManager：location / startUpdatingLocation / requestLocation / startMonitoring…
-//   3) iOS15+ requestLocationWithCompletionHandler: 直接回调假坐标
-//   4) 授权伪装：locationServicesEnabled / +authorizationStatus 返回 AuthorizedAlways
-//   5) 三家地图 SDK（百度 BMK / 高德 AMap / 腾讯）
-//   6) SpringBoard：仅瓦片代拉 + 可选 CLSimulationManager 兜底
+// 为什么改方向（v1.2.0 日志实锤）：
+//   真机诊断日志 /var/tmp/onyx_debug.log 里，只有
+//     === Onyx v1.2.0 BOOT proc=SpringBoard bundle=com.apple.springboard ===
+//   没有任何第三方 App 的 BOOT 行 —— 说明 Onyx dylib 在 relaxin 上
+//   **只被注入 SpringBoard，第三方 App 进程压根没加载它**。
+//   在 App 进程里做 CLLocationManager hook 的前提就不存在，v1.2.0 的
+//   「不启动真实定位 + 接管 delegate」再正确也没机会执行。
 //
-// 黑名单 ExcludedApps：App 内添加「不改定位」的 App；Onyx 自身默认排除。
+// 因此 v1.3.0：
+//   1) 主力 = SpringBoard 内驱动 CLSimulationManager（系统级模拟，
+//      对所有 App 同时生效，不需要 App 进程注入）—— 这是真机上唯一
+//      已被日志证明「能跑起来」的注入点；
+//   2) App 级 hook 全部保留（万一某个 App 进程确实被注入，也能生效）；
+//   3) 日志链路加固：多路径落盘 + 打印 dylib 自身镜像路径，
+//      「App 里有没有 BOOT」这一次能一次看清。
 //
-// 诊断日志：/var/tmp/onyx_debug.log
-//   · 每次加载强制写一行 BOOT（证明 dylib 是否真的注入 + 配置是否被读到）
-//   · 其后记录 plist 命中路径 / CLLocationManager 生命周期 / delegate 回调 / 调用栈
-//   · App 里「诊断日志」按钮可直接查看（ONYXMapViewController → openDiagLog:）
+// 诊断日志：/var/tmp/onyx_debug.log（写不进去自动换 /tmp/onyx_debug.log）
+//   === Onyx v1.3.0 BOOT proc=xx img=<dylib 路径> ===   ← 有没有注入，看这行
+//   sim: START / sim: STOP                                ← 系统模拟有没有起来
 //
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
@@ -54,6 +54,14 @@
 - (void)locationManager:(id)manager didUpdateLocation:(CLLocation *)location;
 @end
 
+// ---- CLSimulationManager 私有接口（iOS 16 存在性未知，运行期探测） ----
+@interface CLSimulationManager : NSObject
+- (void)startLocationSimulation;
+- (void)stopLocationSimulation;
+- (void)appendSimulatedLocation:(CLLocation *)location;
+- (void)clearSimulatedLocation;
+@end
+
 static NSString *const kDomain  = @"com.yzdmm.onyx";
 #define kChanged CFSTR("com.yzdmm.onyx/changed")
 #define kStop    CFSTR("com.yzdmm.onyx/stop")
@@ -67,21 +75,29 @@ static NSSet<NSString *> *s_excluded = nil;
 static NSHashTable<CLLocationManager *> *s_mgrs = nil;
 static CFAbsoluteTime s_lastRead = 0;
 
-// ---------------- 诊断日志 ----------------
-#define ONYX_LOG_PATH @"/var/tmp/onyx_debug.log"
-static NSUInteger s_logBytes = 0;
-
-static void OWrite(NSString *line) {
+// ---------------- 诊断日志（多路径，避免 App 沙箱里 /var/tmp 写不进） ----------------
+static NSArray<NSString *> *OnyxLogPaths(void) {
+    static NSArray<NSString *> *a = nil;
+    if (!a) {
+        a = @[@"/var/tmp/onyx_debug.log",
+              @"/tmp/onyx_debug.log",
+              @"/var/jb/tmp/onyx_debug.log"];
+    }
+    return a;
+}
+static BOOL OWrite(NSString *line) {
     const char *s = line.UTF8String;
     size_t len = strlen(s);
-    int fd = open("/var/tmp/onyx_debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) return;
-    // 超过 512KB 自动截断，避免拖慢 App / 占满磁盘
-    off_t sz = lseek(fd, 0, SEEK_END);
-    if (sz > 512 * 1024) { ftruncate(fd, 0); sz = 0; }
-    if (write(fd, s, len) < 0) { /* ignore */ }
-    close(fd);
-    s_logBytes = (NSUInteger)sz + len;
+    for (NSString *p in OnyxLogPaths()) {
+        int fd = open(p.UTF8String, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd < 0) continue;
+        off_t sz = lseek(fd, 0, SEEK_END);
+        if (sz > 512 * 1024) { ftruncate(fd, 0); sz = 0; }
+        if (write(fd, s, len) < 0) { /* ignore */ }
+        close(fd);
+        return YES;
+    }
+    return NO;
 }
 static NSString *OnyxStack(void) {
     NSArray<NSString *> *syms = [NSThread callStackSymbols];
@@ -110,7 +126,6 @@ static void OLog(NSString *fmt, ...) {
                       [[NSProcessInfo processInfo] processName], msg];
     OWrite(line);
 }
-// 用当前进程名标记「这条日志属于哪个 App —— 排查时一眼看出 App 有没有在调 CoreLocation」
 static void OLogStack(NSString *tag) {
     OLog(@"%@ stack: %@", tag, OnyxStack());
 }
@@ -188,8 +203,7 @@ static CLLocation *_fakeLocation(void) {
                                        timestamp:[NSDate date]];
 }
 
-// ---------------- delegate 回调接管（v1.2.0 核心） ----------------
-// 回调接管实现（定义在下方，先前向声明）
+// ---------------- delegate 回调接管（App 被注入时的核心路径） ----------------
 static void ony_didUpdateLocations(id self, SEL _cmd, id mgr, NSArray *locs);
 
 typedef struct { Class cls; IMP orig; } OnyxHookRec;
@@ -228,7 +242,6 @@ static void OnyxHookDelegateClass(Class c) {
     OLog(@"delegate hooked: [%@] (%d total)", c, g_recN);
 }
 
-// 运行时扫描全类：任何实现该 delegate 方法的类都会被接管
 static void OnyxScanAllDelegates(void) {
     static BOOL s_scanning = NO;
     if (s_scanning) return;
@@ -239,8 +252,7 @@ static void OnyxScanAllDelegates(void) {
         for (unsigned int i = 0; i < n; i++) {
             Class c = cls[i];
             if (!c) continue;
-            SEL sel = NSSelectorFromString(@"locationManager:didUpdateLocations:");
-            if (!class_getInstanceMethod(c, sel)) continue;
+            if (!class_getInstanceMethod(c, NSSelectorFromString(@"locationManager:didUpdateLocations:"))) continue;
             OnyxEnsureRecCap(g_recN + 1);
             if (g_recN >= g_recCap) break;
             OnyxHookDelegateClass(c);
@@ -264,16 +276,15 @@ static void ony_didUpdateLocations(id self, SEL _cmd, id mgr, NSArray *locs) {
     if (o) {
         ((void (*)(id, SEL, id, id))o)(self, _cmd, mgr, outArr);
     } else if (!act) {
-        // 兜底：极少数类未被接管时，仍尝试走原实现
         SEL sel = NSSelectorFromString(@"locationManager:didUpdateLocations:");
-        IMP cur = method_getImplementation(class_getInstanceMethod(object_getClass(self), sel));
+        Method m = class_getInstanceMethod(object_getClass(self), sel);
+        IMP cur = m ? method_getImplementation(m) : NULL;
         if (cur && cur != (IMP)ony_didUpdateLocations) {
             ((void (*)(id, SEL, id, id))cur)(self, _cmd, mgr, outArr);
         }
     }
 }
 
-// 主动向 delegate 推一帧假坐标（不启动真实定位）
 static void _pushToDelegate(CLLocationManager *mgr) {
     if (!_active()) return;
     OnyxScanAllDelegates();
@@ -286,31 +297,104 @@ static void _pushToDelegate(CLLocationManager *mgr) {
     }
 }
 
-#pragma mark - SpringBoard 系统级模拟（兜底）
+#pragma mark - SpringBoard 系统级模拟（v1.3.0 主力）
 
-@interface CLSimulationManager : NSObject
-- (void)appendSimulatedLocation:(CLLocation *)location;
-- (void)startLocationSimulation;
-- (void)stopLocationSimulation;
-@end
 static CLSimulationManager *s_simMgr = nil;
 static BOOL s_simulating = NO;
+static dispatch_source_t s_simTimer = nil;
+static dispatch_source_t s_pollTimer = nil;
+
+static void OnyxSimHeartbeat(void);
+static void OnyxCancelSimTimer(void);
+static void _applySimulation(void);
+
+static void OnyxCancelSimTimer(void) {
+    if (s_simTimer) { dispatch_source_cancel(s_simTimer); s_simTimer = nil; }
+}
+
+// 持续补帧：locationd 偶发丢模拟点时，靠心跳把假坐标钉住
+static void OnyxSimHeartbeat(void) {
+    if (!s_simMgr) return;
+    SEL appendSel = NSSelectorFromString(@"appendSimulatedLocation:");
+    if ([s_simMgr respondsToSelector:appendSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [s_simMgr performSelector:appendSel withObject:_fakeLocation()];
+#pragma clang diagnostic pop
+    }
+}
+
+static void OnyxScheduleSimTimer(void) {
+    OnyxCancelSimTimer();
+    dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    if (!t) return;
+    dispatch_source_set_event_handler(t, ^{ OnyxSimHeartbeat(); });
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                              (uint64_t)(3 * NSEC_PER_SEC), (int64_t)(1 * NSEC_PER_SEC));
+    dispatch_resume(t);
+    s_simTimer = t;
+}
+
+// SpringBoard 内定时重读 plist：通知万一丢了他也能自愈
+static void OnyxPollPrefs(void) {
+    CFAbsoluteTime last = s_lastRead;
+    _readPrefs();
+    if (s_lastRead != last) _applySimulation();
+}
 
 static void _applySimulation(void) {
     if (!s_isSpringBoard) return;
     if (s_enabled && s_hasCoord) {
         if (!s_simMgr) {
             Class c = NSClassFromString(@"CLSimulationManager");
-            if (!c) { NSLog(@"[Onyx] CLSimulationManager not found"); return; }
+            if (!c) {
+                OLog(@"sim: CLSimulationManager class NOT FOUND on this iOS");
+                return;
+            }
             s_simMgr = [[c alloc] init];
+            OLog(@"sim: created %@", s_simMgr);
         }
         if (!s_simMgr) return;
-        [s_simMgr appendSimulatedLocation:_fakeLocation()];
-        if (!s_simulating) { [s_simMgr startLocationSimulation]; s_simulating = YES; }
-        NSLog(@"[Onyx] sim started -> %.6f,%.6f", s_lat, s_lng);
+
+        SEL appendSel = NSSelectorFromString(@"appendSimulatedLocation:");
+        if ([s_simMgr respondsToSelector:appendSel]) {
+            // 先塞 3 帧，让 locationd 建立一段连续轨迹（单点会被当成静止点）
+            for (int i = 0; i < 3; i++) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                [s_simMgr performSelector:appendSel withObject:_fakeLocation()];
+#pragma clang diagnostic pop
+            }
+        } else {
+            OLog(@"sim: WARN appendSimulatedLocation: unavailable");
+        }
+        if (!s_simulating) {
+            SEL startSel = NSSelectorFromString(@"startLocationSimulation");
+            if ([s_simMgr respondsToSelector:startSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                [s_simMgr performSelector:startSel];
+#pragma clang diagnostic pop
+                s_simulating = YES;
+                OLog(@"sim: START -> %.6f,%.6f", s_lat, s_lng);
+            } else {
+                OLog(@"sim: WARN startLocationSimulation unavailable");
+            }
+        }
+        OnyxScheduleSimTimer();
     } else if (s_simulating) {
-        [s_simMgr stopLocationSimulation]; s_simulating = NO; s_simMgr = nil;
-        NSLog(@"[Onyx] sim stopped");
+        OnyxCancelSimTimer();
+        if (s_simMgr) {
+            SEL stopSel = NSSelectorFromString(@"stopLocationSimulation");
+            if ([s_simMgr respondsToSelector:stopSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                [s_simMgr performSelector:stopSel];
+#pragma clang diagnostic pop
+            }
+        }
+        s_simulating = NO; s_simMgr = nil;
+        OLog(@"sim: STOP");
     }
 }
 
@@ -324,12 +408,12 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
             if (m) _pushToDelegate(m);
         }
     }
-    NSLog(@"[Onyx] changed: enabled=%d hasCoord=%d", s_enabled, s_hasCoord);
+    OLog(@"changed: enabled=%d hasCoord=%d sim=%d", s_enabled, s_hasCoord, (int)s_simulating);
 }
 static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
     s_enabled = NO; s_hasCoord = NO;
     _applySimulation();
-    NSLog(@"[Onyx] stopped");
+    OLog(@"stopped");
 }
 
 #pragma mark - Hooks
@@ -356,7 +440,6 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
 }
 - (void)setDelegate:(id)delegate {
     %orig;
-    // 立刻接管 delegate 所属类（App 常动态生成 VC 作为 delegate）
     if (delegate) {
         OnyxHookDelegateClass(object_getClass(delegate));
         OLog(@"setDelegate: [%@]", object_getClass(delegate));
@@ -367,7 +450,6 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
         });
     }
 }
-// ★启用时完全不启动真实定位，只推假坐标
 - (void)startUpdatingLocation {
     OnyxScanAllDelegates();
     OLogStack(@"startUpdatingLocation");
@@ -394,7 +476,6 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
     }
     %orig;
 }
-// iOS 15+
 - (void)requestLocationWithCompletionHandler:(void (^)(CLLocation *, NSError *))completionHandler {
     OLogStack(@"requestLocationWithCompletionHandler");
     if (_active()) {
@@ -403,7 +484,6 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
     }
     %orig;
 }
-// 授权伪装：App 常见「先查权限再请求」的分支，必须放行
 + (BOOL)locationServicesEnabled {
     if (s_enabled && s_hasCoord) return YES;
     return %orig;
@@ -532,14 +612,27 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
         s_mgrs = [NSHashTable weakObjectsHashTable];
         _readPrefs();
 
-        // 强制自检日志：确认 dylib 是否真的注入 + 配置是否被读到
+        // 强制自检日志：dylib 自身是从哪个镜像路径加载进来的
         if (!s_bootLogged) {
             s_bootLogged = YES;
             NSString *bid = NSBundle.mainBundle.bundleIdentifier ?: procName;
-            NSDictionary *d = _onyxLoadPlist();
+            NSString *imgPath = @"";
+            uint32_t cnt = _dyld_image_count();
+            NSMutableArray *found = [NSMutableArray array];
+            for (uint32_t i = 0; i < cnt; i++) {
+                const char *nm = _dyld_get_image_name(i);
+                if (!nm) continue;
+                NSString *s = [NSString stringWithUTF8String:nm];
+                if ([s rangeOfString:@"onyx" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                    [found addObject:s];
+                }
+            }
+            imgPath = [found componentsJoinedByString:@","];
+            if (!imgPath.length) imgPath = @"(not in dyld image list)";
             OWrite([NSString stringWithFormat:
-                   @"=== Onyx v1.2.0 BOOT proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f ===\n",
-                   procName, bid, d ? @"hit" : @"MISS", (int)s_enabled, (int)s_hasCoord, s_lat, s_lng]);
+                   @"=== Onyx v1.3.0 BOOT proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
+                   procName, bid, (s_enabled ? @"hit" : @"?"), (int)s_enabled, (int)s_hasCoord,
+                   s_lat, s_lng, (int)s_simulating, imgPath]);
         }
 
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
@@ -550,15 +643,23 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
         if (s_isSpringBoard) {
             [[OnyxTileProxy shared] startObserving];
             _applySimulation();
-            NSLog(@"[Onyx] loaded (SpringBoard) simulating=%d", s_simulating);
+            // 3 秒轮询兜底：Darwin 通知偶尔丢，靠轮询自愈
+            s_pollTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+            if (s_pollTimer) {
+                dispatch_source_set_event_handler(s_pollTimer, ^{ OnyxPollPrefs(); });
+                dispatch_source_set_timer(s_pollTimer,
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
+                    (uint64_t)(3 * NSEC_PER_SEC), (int64_t)(1 * NSEC_PER_SEC));
+                dispatch_resume(s_pollTimer);
+            }
+            OLog(@"loaded (SpringBoard) simulating=%d", (int)s_simulating);
         } else {
             %init(OnyxHooks);
             %init(BaiduHooks);
             %init(AMapHooks);
             %init(TencentHooks);
-            NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d excluded=%@",
-                  procName, s_enabled, s_hasCoord, _active(),
-                  s_excluded ? s_excluded.allObjects : @[]);
+            OLog(@"loaded (app=%@) enabled=%d hasCoord=%d active=%d",
+                 procName, s_enabled, s_hasCoord, _active());
         }
     }
 }

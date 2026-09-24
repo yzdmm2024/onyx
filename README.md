@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.2.0**
+> 当前版本：**1.3.0**
 
 ---
 
@@ -12,7 +12,7 @@
 
 两个核心能力：
 
-1. **定位模拟** — 每个 App 进程内**直接 Hook `CoreLocation`**（坐标对象本体 + `CLLocationManager` + 百度/高德/腾讯三家地图 SDK）注入假坐标，保证所有 App 都读到假坐标；SpringBoard 内另跑 `CLSimulationManager` 系统级模拟作兜底。
+1. **定位模拟** — **主力 = SpringBoard 系统级模拟**：`CLSimulationManager` 在 SpringBoard 内驱动，对**全系统所有 App** 同时生效，不需要 App 进程注入；App 内 `CoreLocation` hook 作为补充（该注入时自动生效）。
 2. **地图选点** — 自带 App 内嵌自绘瓦片地图，可搜索 / 拖动 / 缩放选点；瓦片由 SpringBoard 进程代拉。
 
 ### 关于反作弊检测（重要）
@@ -33,23 +33,44 @@
 v1.1.0 的 `startUpdatingLocation` 是**先 `%orig`（真的启动 GPS）再推一帧假坐标**。
 App 的 delegate 因此**同时收到真、假两帧**，而 App 普遍采用「以最后一次定位为准」，
 真实那帧照常在假帧之后到达 → 覆盖掉假坐标。表现就是"改了定位，App 还是显示真实位置"。
+v1.2.0 已改为「启用时完全不启动真实定位 + 接管 delegate 回调」，**代码逻辑是对的**。
 
-v1.2.0 改为：
+### v1.3.0：为什么还要继续改 —— 日志证明 dylib 没进 App 进程
 
-1. 启用时**完全不启动真实定位**（`startUpdatingLocation` 直接拦截，不调 `%orig`），只推假坐标；
-2. **接管 delegate 回调** `locationManager:didUpdateLocations:`，运行时扫描全类，把回调数组直接替换成假坐标 —— 不管 App 用哪个类当 delegate 都盖得住；
-3. 补全 iOS 15+ 的 `requestLocationWithCompletionHandler:` 与授权状态伪装（`locationServicesEnabled` / `authorizationStatus` 返回 `AuthorizedAlways`，放行"先查权限再请求"的分支）。
+v1.2.0 的真机日志里，**只有 SpringBoard 的 BOOT，没有任何第三方 App 的 BOOT**：
+
+```
+=== Onyx v1.2.0 BOOT proc=SpringBoard bundle=com.apple.springboard ===
+```
+
+只要 App 进程加载了 dylib，`%ctor` 就一定会写这一行。一行都没有 = **dylib 没进 App 进程**。
+所以在 App 内部 `hook CLLocationManager` 这套思路，在这台 relaxin 设备上**前提就不成立**，
+逻辑再对也没机会执行。v1.3.0 因此把主力切到唯一被日志证明"能跑起来"的注入点 —— **SpringBoard**。
+
+v1.3.0 做法：
+
+1. **SpringBoard 内驱动 `CLSimulationManager`** → 系统级模拟，所有 App 同时拿到假坐标，不依赖 App 注入；
+2. 先塞 3 帧建立轨迹，再 `startLocationSimulation`；
+3. **每 3 秒补帧心跳**，locationd 偶发丢模拟点时自动钉住；
+4. **SpringBoard 内每 3 秒重读 plist**（Darwin 通知丢包自愈），启用/关闭即时生效；
+5. App 内 hook 全部保留 —— 哪天某个 App 进程真被注入了，它会额外生效。
+
+> 已知取舍：系统级模拟对**所有** App 生效，黑名单在模拟模式下无法给单个 App 还原真实位置
+> （模拟器本身没有"只给某 App 放行"的开关）。要个别 App 保持真实，请改用需要注入思路的旧版本。
 
 ### 排查：诊断日志
 
 改完还是无效时，用日志定位，别再盲调：
 
-- 日志路径：**`/var/tmp/onyx_debug.log`**
+- 日志路径：**`/var/tmp/onyx_debug.log`**（写不进去自动 fallback 到 `/tmp/onyx_debug.log`）
 - 打开 Onyx App → 主界面底部「**诊断日志**」按钮 → 直接看到内容，截图/复制发来即可
 - 每次进程加载都会**强制写一行 BOOT**，格式：
-  `=== Onyx v1.2.0 BOOT proc=<进程名> bundle=<bundle id> plist=hit|MISS enabled=0|1 hasCoord=0|1 lat=.. lng=.. ===`
-  - `plist=MISS enabled=0` → 配置没写进去 / 路径不对
-  - 日志里**完全没有** `startUpdatingLocation` 相关行 → 这个 App 压根没走 `CLLocationManager`（可能用 IP 定位或自家 SDK），需要换拦截点
+  `=== Onyx v1.3.0 BOOT proc=<进程名> bundle=<bundle id> ... img=<dylib 镜像路径> ===`
+  - **关键**：`proc=SpringBoard` = 只有系统进程加载了它（预期，主力在这）；
+    **出现 `proc=ColorfulClouds` 之类的行 = 该 App 进程确实注入成功了**。
+  - `img=(not in dyld image list)` → dylib 被加载过但不在镜像表里，`plist=MISS` 通常是同一类问题（路径在 App 命名空间里不可见）。
+- 系统模拟行：`sim: START -> lat,lng` / `sim: STOP` / `sim: WARN xxx unavailable`。
+  出现 `WARN appendSimulatedLocation: unavailable` = 该 iOS 版本私有 API 名不同，需要换写法。
 - 日志上限 512KB 自动截断，不会撑爆磁盘
 
 ---
