@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.9.4
+Version: 0.5.9.5
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.9.4 根治无 VPN 瓦片加载：新增独立 root 常驻 daemon(OnyxNetDaemon, platform-application 联网) 唯一负责代拉瓦片落盘共享缓存，OnyxApp 直接读取，不再依赖 SpringBoard/自联网络，断网也能出图有离线底图兜底。v0.5.9.3 无网强兜底：OSM 源一次失败立即进离线程序化底图。v0.5.9.2 补 no-sandbox entitlement。v0.5.9.1 新增程序化离线底图。v0.5.9 恢复系统级全局模拟 + 恢复真实位置 + 记忆开关。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.5.9.5 代拉加速：daemon 6并发下载(原串行) + 请求目录队列化(不再单plist覆盖丢请求) + 超时智能重置(有新瓦片就续时不轻易离线)，地图加载速度大幅提升且更稳定。v0.5.9.4 新增独立root常驻daemon代拉瓦片。v0.5.9.3 无网强兜底：OSM源一次失败立即进离线程序化底图。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。

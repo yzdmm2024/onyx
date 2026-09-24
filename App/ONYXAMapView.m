@@ -549,6 +549,16 @@ static NSString *OnyxTileCacheDir(void) {
     return dir;
 }
 
+static NSString *OnyxTileReqDir(void) {
+    static NSString *dir;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dir = @"/var/mobile/Library/OnyxTileReq";
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+    });
+    return dir;
+}
+
 static NSString *OnyxTileSHA1(NSString *s) {
     const char *cstr = [s UTF8String];
     unsigned char digest[20];
@@ -570,29 +580,30 @@ static NSString *OnyxTileSHA1(NSString *s) {
     return d.length ? [UIImage imageWithData:d] : nil;
 }
 
-// 提交代拉请求：把一批瓦片 URL 写进请求 plist 并发 Darwin 通知；带节流避免频繁写磁盘
+// 提交代拉请求：把一批瓦片 URL 写成独立请求 plist 放到请求目录，并发 Darwin 通知
+// 用独立文件而非单文件，避免滚动时多次请求互相覆盖
 - (void)_submitProxyRequests:(NSArray<NSString *> *)urls {
     if (!urls.count) return;
     NSTimeInterval now = CFAbsoluteTimeGetCurrent();
-    // 距上次提交 <0.15s 则合并批处理（滚动 5 瓦片内）
-    NSMutableArray *pending = [NSMutableArray arrayWithArray:urls];
     _proxyLastRequestAt = now;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        // 合并尚未提交的 key（短时间内多次 updateVisibleTiles 会重复调用）
-        NSMutableArray *merged = [NSMutableArray array];
+        // 过滤掉已在 inflight 的
+        NSMutableArray *fresh = [NSMutableArray array];
         @synchronized (_proxyInFlight) {
-            for (NSString *u in pending) {
+            for (NSString *u in urls) {
                 if ([_proxyInFlight containsObject:u]) continue;
                 [_proxyInFlight addObject:u];
-                [merged addObject:u];
+                [fresh addObject:u];
             }
         }
-        if (!merged.count) return;
-        NSMutableDictionary *req = [NSMutableDictionary dictionary];
-        req[@"urls"] = merged;
-        req[@"token"] = [[NSUUID UUID] UUIDString];
+        if (!fresh.count) return;
+        // 写成独立请求文件：uuid.plist，daemon 扫目录去重并并行下载
+        NSString *token = [[NSUUID UUID] UUIDString];
+        NSString *reqPath = [OnyxTileReqDir() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%@.plist", token]];
+        NSDictionary *req = @{@"urls": fresh, @"token": token};
         @try {
-            [req writeToFile:@"/var/mobile/Library/Preferences/com.yzdmm.onyx.tilereq.plist" atomically:YES];
+            [req writeToFile:reqPath atomically:YES];
             CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                 CFSTR("com.yzdmm.onyx/tilereq"), NULL, NULL, YES);
         } @catch (NSException *e) {
@@ -601,15 +612,20 @@ static NSString *OnyxTileSHA1(NSString *s) {
     });
 }
 
-// 注入进程完成下载后：重查共享缓存，能读到的瓦片直接显示
+// daemon 完成下载后：重查共享缓存，能读到的瓦片直接显示
+// 超时策略：每有新瓦片成功就重置计时；只有 30 秒内一张新瓦片都没拿到才放弃
 - (void)handleProxyResult {
-    static NSDate *failAfter; // 距首次等待超过 30s 则放弃代拉，走离线网格兜底
+    static NSDate *lastProgressAt; // 上次有瓦片成功的时间
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ failAfter = nil; });
+    dispatch_once(&once, ^{ lastProgressAt = nil; });
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!_hasProxyWaitStarted) { _hasProxyWaitStarted = YES; failAfter = [NSDate date]; }
+        if (!_hasProxyWaitStarted) {
+            _hasProxyWaitStarted = YES;
+            lastProgressAt = [NSDate date];
+        }
         // 遍历当前在等待代拉的 inflight key，尝试读共享缓存
         NSArray *allKeys = [_inflight allObjects];
+        NSInteger newHit = 0;
         NSMutableArray *remaining = [NSMutableArray array];
         for (NSString *key in allKeys) {
             int x, y; NSInteger z;
@@ -621,6 +637,7 @@ static NSString *OnyxTileSHA1(NSString *s) {
                 [_inflight removeObject:key];
                 @synchronized (_proxyInFlight) { [_proxyInFlight removeObject:url]; }
                 _tileOkCount++;
+                newHit++;
                 UIImageView *iv = _tileViews[key];
                 if (iv) iv.image = img;
                 if (_offlineMode) [self leaveOfflineMode];
@@ -628,13 +645,19 @@ static NSString *OnyxTileSHA1(NSString *s) {
                 [remaining addObject:key];
             }
         }
-        BOOL tooLong = failAfter && -[failAfter timeIntervalSinceNow] > 30.0;
-        if (tooLong && remaining.count) {
-            // 代拉彻底失败：回到离线网格底图兜底
+        if (newHit > 0) {
+            // 有新瓦片到了，重置进度计时
+            lastProgressAt = [NSDate date];
+        }
+        // 30 秒无任何新进展才判失败（滚动过程中持续有新请求进来时不应超时）
+        BOOL stuck = lastProgressAt && -[lastProgressAt timeIntervalSinceNow] > 30.0;
+        if (stuck && remaining.count) {
+            // 代拉彻底卡住：回到离线网格底图兜底
             _hasProxyWaitStarted = NO;
-            failAfter = nil;
+            lastProgressAt = nil;
             _reportedFail = NO;
             [_inflight removeAllObjects];
+            @synchronized (_proxyInFlight) { [_proxyInFlight removeAllObjects]; }
             [self handleTileFail];
             [self updateCoordLabel];
             if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
@@ -643,7 +666,7 @@ static NSString *OnyxTileSHA1(NSString *s) {
             return;
         }
         [self updateCoordLabel];
-        // 仍有瓦片没到位，稍后再查
+        // 仍有瓦片没到位，稍后再查（daemon 也会在完成一批时发 tileok 通知）
         if (remaining.count) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self handleProxyResult];
