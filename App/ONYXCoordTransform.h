@@ -22,3 +22,4 @@ typedef NS_ENUM(NSInteger, OnyxCoordSystem) {
 + (CLLocationCoordinate2D)bd09FromWgs84:(CLLocationCoordinate2D)coord;
 
 @end
+

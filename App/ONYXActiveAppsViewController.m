@@ -63,7 +63,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"运行中的应用";
+    self.title = @"已排除的应用";
     self.tableView.rowHeight = 68;
     self.tableView.separatorInset = UIEdgeInsetsMake(0, 74, 0, 0);
     [self.tableView registerClass:[ONYXAAAppCell class] forCellReuseIdentifier:@"aa"];
@@ -74,7 +74,7 @@
                                                                               action:@selector(doneTapped:)];
 
     [self loadSelected];
-    // 监听 SelectedApps 变化，若从外部移除则同步刷新
+    // 监听 ExcludedApps 变化，若从外部移除则同步刷新
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(prefsChanged:)
                                                  name:@"com.yzdmm.onyx/changed"
@@ -93,7 +93,7 @@
 
 - (void)loadSelected {
     NSArray *all = [self.class allApplications];
-    id arr = OnyxPrefsRead(@"SelectedApps");
+    id arr = OnyxPrefsRead(@"ExcludedApps");
     NSArray *bids = [arr isKindOfClass:[NSArray class]] ? arr : nil;
     NSMutableArray *ordered = [NSMutableArray array];
     for (NSString *bid in bids) {
@@ -154,7 +154,7 @@
     NSString *bid = self.selected[index];
     [self.selected removeObjectAtIndex:index];
 
-    OnyxPrefsWrite(@"SelectedApps", [self.selected copy]);
+    OnyxPrefsWrite(@"ExcludedApps", [self.selected copy]);
 
     if (self.onRemove) self.onRemove();
 }

@@ -154,7 +154,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"选择应用";
+    self.title = @"排除应用（黑名单）";
     self.tableView.rowHeight = 64;
     self.tableView.separatorInset = UIEdgeInsetsMake(0, 70, 0, 0);
     [self.tableView registerClass:[ONYXAppCell class] forCellReuseIdentifier:@"app"];
@@ -181,7 +181,7 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
     self.filteredApps = self.apps;
 
     // 与 saveSelected 一致，从统一 plist 读（Tweak 同路径），避免读不到选中列表
-    id arr = OnyxPrefsRead(@"SelectedApps");
+    id arr = OnyxPrefsRead(@"ExcludedApps");
     self.selected = [arr isKindOfClass:[NSArray class]] ? [NSMutableSet setWithArray:arr] : [NSMutableSet set];
 }
 
@@ -225,13 +225,13 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 - (void)saveSelected {
-    OnyxPrefsWrite(@"SelectedApps", [self.selected allObjects]);
+    OnyxPrefsWrite(@"ExcludedApps", [self.selected allObjects]);
 }
 
 - (void)clearTapped:(id)sender {
     if (self.selected.count == 0) return;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"清除选择"
-                                                                   message:@"确定清空所有已选应用？"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"清空黑名单"
+                                                                   message:@"确定清空所有已排除的应用？"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"清除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
@@ -267,3 +267,4 @@ static NSString *const kDomain = @"com.yzdmm.onyx";
 }
 
 @end
+

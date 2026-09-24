@@ -7,3 +7,4 @@
 + (UIImage *)placeholderIconForName:(NSString *)name;
 
 @end
+

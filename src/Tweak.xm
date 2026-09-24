@@ -36,7 +36,7 @@ static NSHashTable<CLLocationManager *> *s_mgrs = nil;
 static double s_lat = 0, s_lng = 0;
 static BOOL s_hasCoord = NO;
 static BOOL s_enabled = NO;
-static NSSet<NSString *> *s_selectedApps = nil;
+static NSSet<NSString *> *s_excludedApps = nil;
 
 // 直接读取 plist，绕过 cfprefsd 在 rootless / RootHide 下的跨进程隔离
 static NSDictionary *_onyxLoadPlist(void) {
@@ -61,8 +61,8 @@ static void _readPrefs(void) {
         NSNumber *la = d[@"Latitude"], *ln = d[@"Longitude"];
         s_hasCoord = (la && ln);
         if (s_hasCoord) { s_lat = [la doubleValue]; s_lng = [ln doubleValue]; }
-        NSArray *sel = d[@"SelectedApps"];
-        s_selectedApps = [sel isKindOfClass:[NSArray class]] ? [NSSet setWithArray:sel] : nil;
+        NSArray *sel = d[@"ExcludedApps"];
+        s_excludedApps = [sel isKindOfClass:[NSArray class]] ? [NSSet setWithArray:sel] : nil;
         s_lastRead = CFAbsoluteTimeGetCurrent();
         return;
     }
@@ -80,10 +80,10 @@ static void _readPrefs(void) {
     if (s_hasCoord) { s_lat = [(__bridge NSNumber *)la doubleValue]; s_lng = [(__bridge NSNumber *)ln doubleValue]; }
     if (la) CFRelease(la);
     if (ln) CFRelease(ln);
-    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("SelectedApps"), kDomainCF,
+    CFPropertyListRef arr = CFPreferencesCopyValue(CFSTR("ExcludedApps"), kDomainCF,
                                                     kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    if (arr) { s_selectedApps = [NSSet setWithArray:(__bridge NSArray *)arr]; CFRelease(arr); }
-    else { s_selectedApps = nil; }
+    if (arr) { s_excludedApps = [NSSet setWithArray:(__bridge NSArray *)arr]; CFRelease(arr); }
+    else { s_excludedApps = nil; }
     s_lastRead = CFAbsoluteTimeGetCurrent();
 }
 
@@ -92,13 +92,17 @@ static void _readPrefsThrottled(void) {
     if (now - s_lastRead > 1.0) _readPrefs();
 }
 
-// 白名单模式：只有用户勾选的 App 才模拟定位
+// 黑名单模式：默认所有被注入的 App 都模拟定位，
+// 只有 ExcludedApps（黑名单）里的 App 用真实位置
 static BOOL _active(void) {
     _readPrefsThrottled();
     if (!s_enabled || !s_hasCoord) return NO;
     NSString *bid = NSBundle.mainBundle.bundleIdentifier;
     if (!bid) return NO;
-    return [s_selectedApps containsObject:bid];
+    // 黑名单：在排除列表里 → 不用虚拟定位 → 返回 NO
+    if (s_excludedApps && [s_excludedApps containsObject:bid]) return NO;
+    // 不在排除列表里 → 用虚拟定位
+    return YES;
 }
 
 static CLLocationCoordinate2D _fakeCoord(void) {
@@ -128,7 +132,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
         }
     }
     NSLog(@"[Onyx] prefs changed: enabled=%d hasCoord=%d selected=%@",
-          s_enabled, s_hasCoord, s_selectedApps.allObjects);
+          s_enabled, s_hasCoord, s_excludedApps.allObjects);
 }
 
 %group OnyxHooks
@@ -358,5 +362,6 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     %init(TencentHooks);
 
     NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d selected=%@",
-          procName, s_enabled, s_hasCoord, _active(), s_selectedApps.allObjects);
+          procName, s_enabled, s_hasCoord, _active(), s_excludedApps.allObjects);
 }
+

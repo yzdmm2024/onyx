@@ -415,13 +415,13 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 - (void)refreshStatusPanel {
-    id arr = OnyxPrefsRead(@"SelectedApps");
+    id arr = OnyxPrefsRead(@"ExcludedApps");
     NSInteger count = [arr isKindOfClass:[NSArray class]] ? [(NSArray *)arr count] : 0;
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     fmt.dateFormat = @"HH:mm:ss";
     NSString *time = [fmt stringFromDate:[NSDate date]];
     self.statusBar.text = self.running
-        ? [NSString stringWithFormat:@"运行中 · %ld App · %@", (long)count, time]
+        ? [NSString stringWithFormat:@"运行中 · 已排除 %ld", (long)count]
         : @"未启用";
 }
 
@@ -438,7 +438,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self startSystemSimulation]; // 全局注入 locationd（0.5.0 机制）
     [self saveState];
     [self updateStatus];
-    NSString *msg = @"已启用全局模拟。所有使用系统定位的 App（含百度/高德/微信等）都会收到所选坐标。";
+    NSString *msg = @"已启用模拟。所有使用系统定位的 App（含百度/高德/微信等）都会收到所选坐标。在「排除应用」中勾选的 App 仍使用真实位置。";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -546,7 +546,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
         if (!s) return;
         [s refreshStatusPanel];
         // 若已全部移除，自动停止模拟
-        id arrRead = OnyxPrefsRead(@"SelectedApps");
+        id arrRead = OnyxPrefsRead(@"ExcludedApps");
         NSInteger cnt = [arrRead isKindOfClass:[NSArray class]] ? [(NSArray *)arrRead count] : 0;
         if (cnt == 0) {
             s.running = NO;
@@ -710,3 +710,4 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 }
 
 @end
+

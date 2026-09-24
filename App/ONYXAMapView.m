@@ -1,4 +1,4 @@
-﻿#import "ONYXAMapView.h"
+#import "ONYXAMapView.h"
 #import "ONYXCoordTransform.h"
 #import <math.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -975,3 +975,4 @@ static void ONYXAMapViewTileOK(CFNotificationCenterRef center, void *observer,
     ONYXAMapView *mapView = (__bridge ONYXAMapView *)observer;
     [mapView handleProxyResult];
 }
+
