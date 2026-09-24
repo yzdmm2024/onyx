@@ -518,6 +518,25 @@ static UIImage *onyx_pinImage(void) {
 
 - (void)handleTileFail {
     _consecFail++;
+    // 已达到最后一个源（OSM）：任何一次失败都立即进离线底图，不再等 3 连（无网时应快速兜底）
+    if (_srcIndex >= kSourceCount - 1) {
+        if (!_reportedFail) {
+            _reportedFail = YES;
+            [self enterOfflineMode];
+            NSString *msg;
+            if (_lastError) {
+                msg = [NSString stringWithFormat:@"%@瓦片加载失败 %@(%ld)，已切换离线底图", [self sourceName], _lastError.domain, (long)_lastError.code];
+            } else if (_tileOkCount > 0) {
+                msg = [NSString stringWithFormat:@"%@部分瓦片加载失败，已切换离线底图", [self sourceName]];
+            } else {
+                msg = [NSString stringWithFormat:@"缺少网络且瓦片加载失败，已切换离线底图", [self sourceName]];
+            }
+            if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+                [self.delegate amapView:self didUpdateStatus:msg];
+            }
+        }
+        return;
+    }
     if (_consecFail >= kFailThreshold && _srcIndex < kSourceCount - 1) {
         NSInteger next = _srcIndex + 1;
         [self applySourceIndex:next animated:YES];
@@ -525,22 +544,6 @@ static UIImage *onyx_pinImage(void) {
             [self.delegate amapView:self didUpdateStatus:[NSString stringWithFormat:@"源切换 → %@", [self sourceName]]];
         }
         return;
-    }
-    if (!_reportedFail) {
-        _reportedFail = YES;
-        // 所有源都失败：进入离线底图兜底，地图永不空白
-        [self enterOfflineMode];
-        NSString *msg;
-        if (_lastError) {
-            msg = [NSString stringWithFormat:@"%@瓦片加载失败 %@(%ld)，已切换离线底图", [self sourceName], _lastError.domain, (long)_lastError.code];
-        } else if (_tileOkCount > 0) {
-            msg = [NSString stringWithFormat:@"%@部分瓦片加载失败，已切换离线底图", [self sourceName]];
-        } else {
-            msg = [NSString stringWithFormat:@"%@瓦片加载失败(无网络?)，已切换离线底图", [self sourceName]];
-        }
-        if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
-            [self.delegate amapView:self didUpdateStatus:msg];
-        }
     }
 }
 
@@ -591,7 +594,7 @@ static UIImage *onyx_pinImage(void) {
     for (double lon = lonStart; lon <= (onyx_worldToLonlat(botRightWorld, _zoom).longitude); lon += step) {
         CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(tl.latitude, lon), _zoom);
         CGFloat vx = wp.x - _origin.x;
-        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.12].CGColor);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.14].CGColor);
         CGContextMoveToPoint(ctx, vx, 0);
         CGContextAddLineToPoint(ctx, vx, sz.height);
         CGContextStrokePath(ctx);
@@ -601,7 +604,7 @@ static UIImage *onyx_pinImage(void) {
     for (double lat = latStart; lat <= tl.latitude; lat += step) {
         CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(lat, tl.longitude), _zoom);
         CGFloat vy = wp.y - _origin.y;
-        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.12].CGColor);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.14].CGColor);
         CGContextMoveToPoint(ctx, 0, vy);
         CGContextAddLineToPoint(ctx, sz.width, vy);
         CGContextStrokePath(ctx);
@@ -615,14 +618,14 @@ static UIImage *onyx_pinImage(void) {
     for (double lon = bigLon; lon <= (onyx_worldToLonlat(botRightWorld, _zoom).longitude); lon += bigStep) {
         CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(tl.latitude, lon), _zoom);
         CGFloat vx = wp.x - _origin.x;
-        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.22].CGColor);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.26].CGColor);
         CGContextMoveToPoint(ctx, vx, 0); CGContextAddLineToPoint(ctx, vx, sz.height); CGContextStrokePath(ctx);
     }
     double bigLat = floor(bl.latitude / bigStep) * bigStep;
     for (double lat = bigLat; lat <= tl.latitude; lat += bigStep) {
         CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(lat, tl.longitude), _zoom);
         CGFloat vy = wp.y - _origin.y;
-        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.22].CGColor);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.26].CGColor);
         CGContextMoveToPoint(ctx, 0, vy); CGContextAddLineToPoint(ctx, sz.width, vy); CGContextStrokePath(ctx);
     }
 
@@ -635,9 +638,43 @@ static UIImage *onyx_pinImage(void) {
     CGContextSetFillColorWithColor(ctx, [UIColor systemRedColor].CGColor);
     CGContextFillEllipseInRect(ctx, CGRectMake(cx-3, cy-3, 6, 6));
 
+    // 中心坐标文字（离线底图直接标注当前位置坐标，非常醒目）
+    NSString *ctrText;
+    if (_hasCenter) {
+        CLLocationCoordinate2D c = [self displayCenter];
+        ctrText = [NSString stringWithFormat:@"%.6f, %.6f", c.latitude, c.longitude];
+    } else if (_offlineRefreshed) {
+        ctrText = @"离线底图 — 等待坐标";
+    } else {
+        ctrText = @"离线底图（无网络）";
+    }
+    NSDictionary *attrs = @{NSFontAttributeName: [UIFont boldSystemFontOfSize:14],
+                            NSForegroundColorAttributeName: [UIColor colorWithWhite:0.15 alpha:0.85]};
+    NSDictionary *bgAttrs = @{NSFontAttributeName: [UIFont boldSystemFontOfSize:14],
+                              NSForegroundColorAttributeName: [UIColor whiteColor]};
+    CGSize ts = [ctrText sizeWithAttributes:attrs];
+    CGFloat textW = ts.width, textH = ts.height;
+    CGRect bar = CGRectMake(8, 8, textW + 16, textH + 8);
+    [[UIColor colorWithWhite:1.0 alpha:0.82] setFill];
+    CGContextRoundRect(ctx, bar, 8);
+    CGContextFillPath(ctx);
+    // 为文字加阴影便于阅读
+    [ctrText drawInRect:CGRectInset(bar, 8, 4) withAttributes:attrs];
+
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     _offlineBaseView.image = img;
+}
+
+static void CGContextRoundRect(CGContextRef ctx, CGRect rect, CGFloat radius) {
+    CGFloat x = CGRectGetMinX(rect), y = CGRectGetMinY(rect);
+    CGFloat w = CGRectGetWidth(rect), h = CGRectGetHeight(rect);
+    CGContextMoveToPoint(ctx, x + radius, y);
+    CGContextAddArcToPoint(ctx, x + w, y, x + w, y + h, radius);
+    CGContextAddArcToPoint(ctx, x + w, y + h, x, y + h, radius);
+    CGContextAddArcToPoint(ctx, x, y + h, x, y, radius);
+    CGContextAddArcToPoint(ctx, x, y, x + w, y, radius);
+    CGContextClosePath(ctx);
 }
 
 // 更新离线定位十字（跟随真实 or 模拟坐标)
