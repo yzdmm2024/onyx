@@ -1,6 +1,6 @@
-// Onyx Tweak v1.3.0
+// Onyx Tweak v1.4.0
 //
-// 定位模拟：★以 SpringBoard 系统级模拟为主（v1.3.0 方向调整）
+// 定位模拟：★以 SpringBoard 系统级模拟为主（v1.3.0 方向调整后的加固）
 //
 // 为什么改方向（v1.2.0 日志实锤）：
 //   真机诊断日志 /var/tmp/onyx_debug.log 里，只有
@@ -10,17 +10,25 @@
 //   在 App 进程里做 CLLocationManager hook 的前提就不存在，v1.2.0 的
 //   「不启动真实定位 + 接管 delegate」再正确也没机会执行。
 //
-// 因此 v1.3.0：
-//   1) 主力 = SpringBoard 内驱动 CLSimulationManager（系统级模拟，
-//      对所有 App 同时生效，不需要 App 进程注入）—— 这是真机上唯一
-//      已被日志证明「能跑起来」的注入点；
-//   2) App 级 hook 全部保留（万一某个 App 进程确实被注入，也能生效）；
-//   3) 日志链路加固：多路径落盘 + 打印 dylib 自身镜像路径，
-//      「App 里有没有 BOOT」这一次能一次看清。
+// v1.3.0 真机日志已证明（用户发的 /var/tmp/onyx_debug.log）：
+//   - SpringBoard 注入成功：plist hit / prefs: enabled=1 hasCoord=1 lat=26.894216 lng=112.572016
+//   - CLSimulationManager 创建成功：sim: created <CLSimulationManager: 0x...>
+//   - 启动成功：sim: START -> 26.894216,112.572016（开关状态机也正常：STOP/START）
+//   - 黑名单读到：excluded=( "com.baidu.map")
+//   但**日志里零个第三方 App 的 BOOT、零条 CLLocationManager 调用**
+//   → App 进程确实没被注入，唯一能改的地方就是 SpringBoard 侧系统模拟。
+//
+// v1.4.0 要解决的唯一问题：「sim: START 打了」≠「locationd 真的在投递模拟点」。
+// SpringBoard 可能压根没资格让 locationd 接受模拟请求，而这一步在日志里是静默的。
+// 所以本版加**端到端回声自检**：SpringBoard 自己起一个 CLLocationManager 向
+// locationd 要一次定位，拿到什么坐标直接判死：
+//   ECHO: FAKE  -> 模拟生效，问题在 App 自身（彩云是 IP/城市定位而非 GPS）
+//   ECHO: REAL  -> 模拟没生效，SpringBoard 的模拟请求被 locationd 无视
+//   ECHO: ERROR/TIMEOUT -> SpringBoard 自己都拿不到定位，看错误码
 //
 // 诊断日志：/var/tmp/onyx_debug.log（写不进去自动换 /tmp/onyx_debug.log）
-//   === Onyx v1.3.0 BOOT proc=xx img=<dylib 路径> ===   ← 有没有注入，看这行
-//   sim: START / sim: STOP                                ← 系统模拟有没有起来
+//   === Onyx v1.4.0 BOOT proc=xx img=<dylib 路径> ===   ← 有没有注入，看这行
+//   sim: START / sim: STOP / sim: HB / ECHO: ...
 //
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
@@ -62,6 +70,30 @@
 - (void)appendSimulatedLocation:(CLLocation *)location;
 - (void)clearSimulatedLocation;
 @end
+
+// ---- 回声自检用的最小 delegate：SpringBoard 自己向 locationd 要一次定位 ----
+// 目的：把「sim: START 打了」和「locationd 真的投递了模拟点」这两件事分开，
+// 否则永远只能靠猜。
+@interface OnyxEchoDelegate : NSObject <CLLocationManagerDelegate>
+@property (nonatomic, copy) void (^onyx_done)(CLLocation *loc, NSError *err);
+@end
+@implementation OnyxEchoDelegate
+- (void)locationManager:(CLLocationManager *)manager didUpdateLocations:(NSArray<CLLocation *> *)locs {
+    void (^cb)(CLLocation *, NSError *) = self.onyx_done;
+    self.onyx_done = nil;                       // 先清回调，避免超时分支重复触发
+    if (cb) cb(locs.count ? locs.lastObject : nil, nil);
+}
+- (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error {
+    void (^cb)(CLLocation *, NSError *) = self.onyx_done;
+    self.onyx_done = nil;
+    if (cb) cb(nil, error);
+}
+@end
+
+// 回声自检期间必须把 mgr / delegate 顶在静态变量上：CLLocationManager 的 delegate 是
+// assign 不持有，方法一返回局部变量就被释放，5 秒后回调永远不会来（假 TIMEOUT）。
+static CLLocationManager *s_echoMgr = nil;
+static OnyxEchoDelegate  *s_echoDel = nil;
 
 static NSString *const kDomain  = @"com.yzdmm.onyx";
 #define kChanged CFSTR("com.yzdmm.onyx/changed")
@@ -302,18 +334,65 @@ static void _pushToDelegate(CLLocationManager *mgr) {
 
 static CLSimulationManager *s_simMgr = nil;
 static BOOL s_simulating = NO;
+static BOOL s_echoBusy = NO;
+static BOOL s_echoLastWasReal = NO;
+static CFAbsoluteTime s_echoLastAt = 0;
 static dispatch_source_t s_simTimer = nil;
 static dispatch_source_t s_pollTimer = nil;
 
 static void OnyxSimHeartbeat(void);
 static void OnyxCancelSimTimer(void);
+static void OnyxEchoTest(void);
 static void _applySimulation(void);
+
+// 端到端回声自检：SpringBoard 自己用 CLLocationManager 向 locationd 要一次定位。
+// 拿到 FAKE 坐标 = 系统模拟真的在工作；拿到 REAL = 模拟请求被 locationd 无视。
+static void OnyxEchoTest(void) {
+    if (!s_isSpringBoard || s_echoBusy) return;
+    if (!s_enabled || !s_hasCoord) return;
+    if (s_echoLastAt > 0 && CFAbsoluteTimeGetCurrent() - s_echoLastAt < 90.0) return;
+    s_echoBusy = YES;
+
+    s_echoMgr = [[CLLocationManager alloc] init];
+    s_echoDel = [[OnyxEchoDelegate alloc] init];
+    OnyxEchoDelegate *d = s_echoDel;
+    d.onyx_done = ^(CLLocation *loc, NSError *err) {
+        s_echoBusy = NO;
+        s_echoLastAt = CFAbsoluteTimeGetCurrent();
+        if (err) {
+            OLog(@"ECHO: ERROR code=%ld domain=%@", (long)err.code, err.domain);
+        } else if (!loc) {
+            OLog(@"ECHO: TIMEOUT (5s 内 locationd 没回调任何坐标)");
+        } else {
+            BOOL fake = (fabs(loc.coordinate.latitude  - s_lat) < 0.0005 &&
+                         fabs(loc.coordinate.longitude - s_lng) < 0.0005);
+            s_echoLastWasReal = !fake;
+            OLog(@"ECHO: %@ -> %.6f,%.6f  (target %.6f,%.6f) hAcc=%.0f  [%@]",
+                 fake ? @"FAKE" : @"REAL",
+                 loc.coordinate.latitude, loc.coordinate.longitude,
+                 s_lat, s_lng, loc.horizontalAccuracy,
+                 fake ? @"系统模拟生效" : @"系统模拟没生效，locationd 仍给真实坐标");
+        }
+    };
+    s_echoMgr.delegate = d;
+    OLog(@"ECHO: start, asking locationd for one fix...");
+    [s_echoMgr startUpdatingLocation];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (s_echoBusy) {
+            s_echoBusy = NO;
+            s_echoLastAt = CFAbsoluteTimeGetCurrent();
+            OLog(@"ECHO: TIMEOUT (5s 内 locationd 没回调任何坐标)");
+        }
+    });
+}
 
 static void OnyxCancelSimTimer(void) {
     if (s_simTimer) { dispatch_source_cancel(s_simTimer); s_simTimer = nil; }
 }
 
 // 持续补帧：locationd 偶发丢模拟点时，靠心跳把假坐标钉住
+// v1.4.0：心跳加日志（每 8 拍打一条，不刷屏）+ 模拟被 locationd 悄悄停掉时自动复活
 static void OnyxSimHeartbeat(void) {
     if (!s_simMgr) return;
     SEL appendSel = NSSelectorFromString(@"appendSimulatedLocation:");
@@ -322,6 +401,25 @@ static void OnyxSimHeartbeat(void) {
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
         [s_simMgr performSelector:appendSel withObject:_fakeLocation()];
 #pragma clang diagnostic pop
+    }
+    // 队列可能被 locationd 消费完而静默停止，这里补一刀
+    if (!s_simulating && s_enabled && s_hasCoord) {
+        SEL startSel = NSSelectorFromString(@"startLocationSimulation");
+        if ([s_simMgr respondsToSelector:startSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [s_simMgr performSelector:startSel];
+#pragma clang diagnostic pop
+            s_simulating = YES;
+            OLog(@"sim: RESTART (queue drained by locationd) -> %.6f,%.6f", s_lat, s_lng);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ OnyxEchoTest(); });
+            return;
+        }
+    }
+    static int beat = 0;
+    if ((++beat % 8) == 0) {
+        OLog(@"sim: HB #%d simulating=%d -> %.6f,%.6f", beat, (int)s_simulating, s_lat, s_lng);
     }
 }
 
@@ -352,8 +450,23 @@ static void _applySimulation(void) {
                 OLog(@"sim: CLSimulationManager class NOT FOUND on this iOS");
                 return;
             }
-            s_simMgr = [[c alloc] init];
-            OLog(@"sim: created %@", s_simMgr);
+            // v1.4.0：优先用系统单例。alloc/init 可能拿到一个没接上 locationd 的
+            // 独立实例，那样后面所有调用都是空响。
+            SEL sharedSel = NSSelectorFromString(@"sharedSimulationManager");
+            if ([c respondsToSelector:sharedSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                id sh = [c performSelector:sharedSel];
+#pragma clang diagnostic pop
+                if (sh) {
+                    OLog(@"sim: sharedSimulationManager -> %@", sh);
+                    s_simMgr = (CLSimulationManager *)sh;
+                }
+            }
+            if (!s_simMgr) {
+                s_simMgr = [[c alloc] init];
+                OLog(@"sim: created (alloc/init) %@", s_simMgr);
+            }
         }
         if (!s_simMgr) return;
 
@@ -382,6 +495,9 @@ static void _applySimulation(void) {
                 OLog(@"sim: WARN startLocationSimulation unavailable");
             }
         }
+        // v1.4.0：模拟起来后做一次端到端回声，直接证明 locationd 有没有在投递
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ OnyxEchoTest(); });
         OnyxScheduleSimTimer();
     } else if (s_simulating) {
         OnyxCancelSimTimer();
@@ -631,7 +747,8 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
             imgPath = [found componentsJoinedByString:@","];
             if (!imgPath.length) imgPath = @"(not in dyld image list)";
             OWrite([NSString stringWithFormat:
-                   @"=== Onyx v1.3.0 BOOT proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
+                   @"=== Onyx v1.4.0 BOOT pid=%d proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
+                   (int)getpid(),
                    procName, bid, (s_enabled ? @"hit" : @"?"), (int)s_enabled, (int)s_hasCoord,
                    s_lat, s_lng, (int)s_simulating, imgPath]);
         }

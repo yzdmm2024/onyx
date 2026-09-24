@@ -332,16 +332,27 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     tv.editable = NO;
     [vc.view addSubview:tv];
 
-    NSString *log = [NSString stringWithContentsOfFile:@"/var/tmp/onyx_debug.log"
-                                              encoding:NSUTF8StringEncoding error:nil];
+    // v1.4.0：Tweak 会往多个路径写日志（App 沙箱里 /var/tmp 可能写不进），
+    // 这里三条全读，把内容拼在一起，避免日志落在别的路径上你根本看不到。
+    NSArray<NSString *> *paths = @[@"/var/tmp/onyx_debug.log",
+                                   @"/tmp/onyx_debug.log",
+                                   @"/var/jb/tmp/onyx_debug.log"];
+    NSMutableString *all = [NSMutableString string];
+    for (NSString *p in paths) {
+        NSString *one = [NSString stringWithContentsOfFile:p
+                                                  encoding:NSUTF8StringEncoding error:nil];
+        if (!one || one.length == 0) continue;
+        NSArray<NSString *> *lines = [one componentsSeparatedByString:@"\n"];
+        if (lines.count > 400) lines = [lines subarrayWithRange:NSMakeRange(lines.count - 400, 400)];
+        [all appendFormat:@"\n----- %@ (最后 %lu 行) -----\n%@", p.lastPathComponent,
+                          (unsigned long)lines.count, [lines componentsJoinedByString:@"\n"]];
+    }
+    NSString *log = all;
     if (!log || log.length == 0) {
         tv.text = @"日志为空。\n\nTweak 可能没有注入到本进程，或 plist 未写入。\n"
                   @"先确认：状态是否显示「已启用」。";
     } else {
-        // 只保留最后 300 行，避免卡顿
-        NSArray<NSString *> *lines = [log componentsSeparatedByString:@"\n"];
-        if (lines.count > 300) lines = [lines subarrayWithRange:NSMakeRange(lines.count - 300, 300)];
-        tv.text = [lines componentsJoinedByString:@"\n"];
+        tv.text = log;
     }
 
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];

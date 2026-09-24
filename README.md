@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.3.0**
+> 当前版本：**1.4.0**
 
 ---
 
@@ -58,18 +58,38 @@ v1.3.0 做法：
 > 已知取舍：系统级模拟对**所有** App 生效，黑名单在模拟模式下无法给单个 App 还原真实位置
 > （模拟器本身没有"只给某 App 放行"的开关）。要个别 App 保持真实，请改用需要注入思路的旧版本。
 
+### v1.4.0：从"模拟启动了"到"模拟真的在投递"
+
+v1.3.0 的日志已经证明 SpringBoard 侧链路是通的（plist 读到了、`sim: created`、
+`sim: START` 都打出来了、开关状态机也正常）。**但「START 打印了」不等于「locationd 真的在把
+模拟点投递给 App」** —— SpringBoard 完全可能被 locationd 无声拒绝，而这一步在日志里不留痕。
+
+v1.4.0 因此加了一个**端到端回声自检**：模拟启动 3 秒后，SpringBoard 自己起一个
+`CLLocationManager` 向 locationd 要一次定位，拿到的坐标直接判死：
+
+| 日志 | 含义 | 下一步 |
+|---|---|---|
+| `ECHO: FAKE -> 26.89,112.57` | **系统模拟生效** | 问题在 App 自身（彩云多是用 IP/城市定位，不是 GPS） |
+| `ECHO: REAL -> 22.5,113.9` | 模拟被 locationd 无视 | SpringBoard 没有模拟权限，要换注入方式 |
+| `ECHO: ERROR code=...` | SpringBoard 自己也拿不到定位 | 看错误码（`kCLErrorDenied` = 权限被拒） |
+| `ECHO: TIMEOUT` | 5 秒无回调 | locationd 没响应，配合上面看 |
+
+其他改动：优先改用 `+sharedSimulationManager` 单例（`alloc/init` 可能拿到没接上 locationd 的
+独立实例，后面所有调用都是空响）；心跳补帧加日志；模拟被 locationd 消费完后自动复活；
+诊断日志合并 `/var/tmp`、`/tmp`、`/var/jb/tmp` 三个路径。
+
 ### 排查：诊断日志
 
 改完还是无效时，用日志定位，别再盲调：
 
 - 日志路径：**`/var/tmp/onyx_debug.log`**（写不进去自动 fallback 到 `/tmp/onyx_debug.log`）
-- 打开 Onyx App → 主界面底部「**诊断日志**」按钮 → 直接看到内容，截图/复制发来即可
+- 打开 Onyx App → 主界面底部「**诊断日志**」按钮 → v1.4.0 会**自动合并三个路径**的内容，截图/复制发来即可
 - 每次进程加载都会**强制写一行 BOOT**，格式：
-  `=== Onyx v1.3.0 BOOT proc=<进程名> bundle=<bundle id> ... img=<dylib 镜像路径> ===`
+  `=== Onyx v1.4.0 BOOT pid=<pid> proc=<进程名> bundle=<bundle id> ... img=<dylib 镜像路径> ===`
   - **关键**：`proc=SpringBoard` = 只有系统进程加载了它（预期，主力在这）；
     **出现 `proc=ColorfulClouds` 之类的行 = 该 App 进程确实注入成功了**。
   - `img=(not in dyld image list)` → dylib 被加载过但不在镜像表里，`plist=MISS` 通常是同一类问题（路径在 App 命名空间里不可见）。
-- 系统模拟行：`sim: START -> lat,lng` / `sim: STOP` / `sim: WARN xxx unavailable`。
+- 系统模拟行：`sim: START -> lat,lng` / `sim: STOP` / `sim: HB #n` / `sim: RESTART` / `ECHO: ...`
   出现 `WARN appendSimulatedLocation: unavailable` = 该 iOS 版本私有 API 名不同，需要换写法。
 - 日志上限 512KB 自动截断，不会撑爆磁盘
 
