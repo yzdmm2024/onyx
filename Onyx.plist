@@ -4,14 +4,12 @@
 <dict>
     <key>Filter</key>
     <dict>
-        <key>Mode</key>
-        <string>WildCard</string>
-        <key>Bundles</key>
-        <array>
-            <!-- 注入所有链接 UIKit 的 App（几乎所有 GUI 应用均链接 UIKit；系统守护进程不链，安全）。
-                 具体对哪些 App 生效由 App 内「应用列表」勾选 + enabled 开关动态决定（见 Tweak.xm _active()）。 -->
-            <string>com.apple.UIKit</string>
-        </array>
+        <!-- 只注入 SpringBoard：
+             - CLSimulationManager 系统级定位模拟，全局生效
+             - 瓦片代拉代理（SpringBoard 是 platformized 可联网进程）
+             不注入任何用户 App，避免被钉钉等反作弊扫描到异常 dylib。 -->
+        <key>Executable</key>
+        <string>SpringBoard</string>
     </dict>
 </dict>
 </plist>

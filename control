@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.9.6
+Version: 0.6.0
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.9.6 去掉独立 LaunchDaemon（避免被钉钉等反作弊扫到异常 daemon 判定虚拟打卡），瓦片代拉改回 SpringBoard 注入承载，保留 6 并发+请求目录队列化+智能超时等加速优化，定位模拟稳定不暴露。v0.5.9.5 代拉加速 6 并发。v0.5.9.3 无网强兜底。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.6.0 重大更新：改用 CLSimulationManager 系统级定位模拟，Tweak 只注入 SpringBoard，不再 hook 任何 App 内定位接口/地图 SDK，钉钉等反作弊检测不到异常 dylib，定位模拟稳定不暴露。保留瓦片代拉加速(6并发+队列化+智能超时)。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
