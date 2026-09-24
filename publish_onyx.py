@@ -194,7 +194,7 @@ def main():
     tree = json.loads(gh("repos/%s/git/trees" % REPO,
                          payload={"base_tree": base_tree, "tree": entries2}))["sha"]
     commit = json.loads(gh("repos/%s/git/commits" % REPO,
-                           payload={"message": "Onyx 1.4.2: 修复定位失效（放开注入范围，per-app hook 生效）",
+                           payload={"message": "Onyx 1.4.3: 真正修复定位失效（Filter 改回 WildCard UIKit，per-app hook 生效）",
                                     "tree": tree, "parents": [base]}))["sha"]
     gh("repos/%s/git/refs/heads/main" % REPO, payload={"sha": commit, "force": False})
     print("PUSHED OK ->", commit)

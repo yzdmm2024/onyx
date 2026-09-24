@@ -2,5 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>Filter</key>
+    <dict>
+        <key>Mode</key>
+        <string>WildCard</string>
+        <key>Bundles</key>
+        <array>
+            <!-- 注入所有链接 UIKit 的 App（几乎所有 GUI 应用均链接 UIKit；系统守护进程不链，安全）。
+                 这是 v0.5.8 验证可用的注入方式：per-app hook 必须真正进到 App 进程才能生效。
+                 具体对哪些 App 生效由 App 内「应用列表」勾选 + enabled 开关动态决定（见 Tweak.xm _active()）。
+                 注意：钉钉等反作弊 App 进程里也会出现 Onyx dylib（可被检测），这是「覆盖所有 App」的取舍。 -->
+            <string>com.apple.UIKit</string>
+        </array>
+    </dict>
 </dict>
 </plist>

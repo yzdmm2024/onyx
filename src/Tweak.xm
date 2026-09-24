@@ -765,7 +765,7 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
             imgPath = [found componentsJoinedByString:@","];
             if (!imgPath.length) imgPath = @"(not in dyld image list)";
             OWrite([NSString stringWithFormat:
-                   @"=== Onyx v1.4.2 BOOT pid=%d proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
+                   @"=== Onyx v1.4.3 BOOT pid=%d proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
                    (int)getpid(),
                    procName, bid, (s_enabled ? @"hit" : @"?"), (int)s_enabled, (int)s_hasCoord,
                    s_lat, s_lng, (int)s_simulating, imgPath]);
