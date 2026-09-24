@@ -36,6 +36,8 @@ jobs:
           export THEOS=/opt/theos
           export PATH="$THEOS/bin:$PATH"
           make clean >/dev/null 2>&1 || true
+          # 修复 maintainer scripts 权限（theos 要求 >=0555）
+          chmod 0755 postinst prerm 2>/dev/null || true
           # 1) 一次 fat 构建（arm64+arm64e）→ iphoneos-arm64.deb（rootless/Dopamine，fat 二进制）
           make package FINALPACKAGE=1 ARCHS="arm64 arm64e" THEOS_PACKAGE_SCHEME=rootless
           ls -la packages/
