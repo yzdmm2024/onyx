@@ -37,12 +37,19 @@ static double s_lat = 0, s_lng = 0;
 static BOOL s_hasCoord = NO;
 static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_excludedApps = nil;
+static NSString *s_readFromPath = nil; // 诊断：最后一次读到配置的路径
 
 // 直接读取 plist，绕过 cfprefsd 在 rootless / RootHide 下的跨进程隔离
-// 优先读 /var/tmp 公共路径（沙盒 App 也能读到），再回退标准路径
+// 优先读 Tweak 同目录（dylib 能从这里加载，就一定能读同目录的文件），
+// 再试 /var/tmp 公共路径，最后回退标准 Preferences 路径。
 static NSDictionary *_onyxLoadPlist(void) {
     NSArray<NSString *> *cands = @[
-        @"/var/tmp/com.yzdmm.onyx.plist",             // 公共路径：所有 App 可读
+        // Tweak 同目录（rootless 路径优先）——dylib 能被加载就一定能读
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
+        @"/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
+        // 公共 tmp 路径
+        @"/var/tmp/com.yzdmm.onyx.plist",
+        // Preferences 标准路径
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/jb/mobile/Library/Preferences/com.yzdmm.onyx.plist",
@@ -50,8 +57,12 @@ static NSDictionary *_onyxLoadPlist(void) {
     ];
     for (NSString *p in cands) {
         NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
-        if (d) return d;
+        if (d) {
+            s_readFromPath = p;
+            return d;
+        }
     }
+    s_readFromPath = nil;
     return nil;
 }
 
@@ -363,7 +374,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     %init(AMapHooks);
     %init(TencentHooks);
 
-    NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d selected=%@",
-          procName, s_enabled, s_hasCoord, _active(), s_excludedApps.allObjects);
+    NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d readFrom=%@ excluded=%@",
+          procName, s_enabled, s_hasCoord, _active(), s_readFromPath ?: @"(none)", s_excludedApps.allObjects);
 }
 

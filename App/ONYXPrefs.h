@@ -28,15 +28,20 @@ static inline id OnyxPrefsRead(NSString *key) {
 }
 
 // 写：CFPreferences + 直写 plist 文件（多路径都写，原子写），并立即同步给各进程的 Tweak。
-// 关键：/var/tmp 是所有 App 都能读的公共路径（沙盒不限制），
-//       Tweak 注入普通 App 后优先从这里读，解决沙盒隔离导致读不到配置的问题。
+// 关键 1：Tweak 同目录优先（dylib 能被加载就一定能读同目录文件）
+// 关键 2：/var/tmp 公共路径兜底（沙盒可能允许）
 static inline void OnyxPrefsWrite(NSString *key, id value) {
     CFStringRef domain = CFSTR("com.yzdmm.onyx");
     CFPreferencesSetValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value,
                           domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    // 多路径都写，保证 Tweak 一定能读到（按优先级）
+    // 多路径都写，保证 Tweak 一定能读到（按优先级从高到低）
     NSArray<NSString *> *paths = @[
-        @"/var/tmp/com.yzdmm.onyx.plist",           // 公共路径：所有 App 可读
+        // Tweak 同目录（rootless + 标准路径都写）
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
+        @"/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
+        // 公共 tmp 路径
+        @"/var/tmp/com.yzdmm.onyx.plist",
+        // Preferences 标准路径
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
     ];
