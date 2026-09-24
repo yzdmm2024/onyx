@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.4.1**
+> 当前版本：**1.4.2**
 
 ---
 
@@ -12,7 +12,7 @@
 
 两个核心能力：
 
-1. **定位模拟** — **主力 = SpringBoard 系统级模拟**：`CLSimulationManager` 在 SpringBoard 内驱动，对**全系统所有 App** 同时生效，不需要 App 进程注入；App 内 `CoreLocation` hook 作为补充（该注入时自动生效）。
+1. **定位模拟** — **主力 = per-app hook**（v1.4.2 起注入所有进程）：在 App 进程内 hook `CLLocationManager` 及百度/高德/腾讯 SDK，直接把 App 读到的坐标替换成假坐标，对单个 App 生效；SpringBoard 内的 `CLSimulationManager` 系统模拟作为补充尝试（但 SpringBoard 缺少 `com.apple.locationd.simulation` 权限，真机通常被 locationd 无视，不要依赖）。
 2. **地图选点** — 自带 App 内嵌自绘瓦片地图，可搜索 / 拖动 / 缩放选点；瓦片由 SpringBoard 进程代拉。
 
 ### 关于反作弊检测（重要）
@@ -130,9 +130,9 @@ v1.4.0 因此加了一个**端到端回声自检**：模拟启动 3 秒后，Spr
 
 ### 2.1 定位模拟（src/Tweak.xm）
 
-- 只在 `SpringBoard` 进程执行（`%ctor` 里判断进程名）。
-- 用 `CLSimulationManager` 私有类：`[[cls alloc] init]` → `appendSimulatedLocation:` → `startLocationSimulation`。
-- 停止：`stopLocationSimulation`。
+- v1.4.2 起注入**所有进程**（Onyx.plist 不再限制 Filter）：SpringBoard 内继续承载瓦片代拉 `OnyxTileProxy`；第三方 App 进程内执行 `OnyxHooks` / `Baidu` / `AMap` / `Tencent` 的 per-app hook（此前因 Filter 只注入 SpringBoard，这些 hook 从未运行，是「改定位无效」的直接原因）。
+- **主力 = per-app hook**：App 进程内 hook `CLLocationManager` 及百度/高德/腾讯 SDK，直接把 App 读到的坐标替换成假坐标，不依赖系统模拟权限。
+- SpringBoard 内的 `CLSimulationManager` 系统模拟保留作补充尝试，但它需要 `com.apple.locationd.simulation` 权限（SpringBoard 没有），真机上通常被 locationd 无视——不要再依赖它。
 
 > ⚠️ **API 必须完全对齐 LocSim**（`C:\Users\Administrator\Desktop\8月\修改定位dylib`）：
 > - ✅ `alloc/init` + `appendSimulatedLocation:` + `startLocationSimulation`
@@ -316,6 +316,7 @@ python publish_onyx.py `
 
 | 版本 | 变更 |
 |---|---|
+| **1.4.2** | 修复「改定位无效」：Onyx.plist 的 Filter 此前只注入 SpringBoard，导致 per-app 的 CLLocationManager/百度/高德/腾讯 hook 全部不执行（死代码），且 SpringBoard 调 CLSimulationManager 因缺少 com.apple.locationd.simulation 权限被 locationd 无视。本版放开注入范围（注入所有进程），让 v1.2.0 验证可用的 per-app hook 重新生效。代价：dylib 进入第三方 App 进程，反作弊可能检测到（见 Onyx.plist）。 |
 | **1.1.0** | **彻底修复「第三方 App 一直显示真实定位」**：回到 v0.7 验证可用的 per-app 直注方案——直接 Hook `CLLocation` 类本体（`coordinate` / `initWithLatitude:longitude:` / `locationWithLatitude:longitude:`）+ `CLLocationManager` + 百度/高德/腾讯三家地图 SDK，任何 App 读到/构造的坐标都被洗成假坐标；SpringBoard 保留 `CLSimulationManager` 系统级模拟作兜底。**新增黑名单**：App 内「黑名单（排除应用）」可把不需要改定位的 App 加进去，这些 App 保持真实位置。注意：此版为让第三方 App 生效改为 per-app hook，dylib 会注入所有 App（含钉钉），反作弊可能检测到注入——若需避开某 App 检测，后续可加进程过滤 |
 | **1.0.2** | 修复 relaxin/RootHide 卸载弹 "Ellekit files are corrupted"：deb 剥离 var/jb/Library 目录条目（CI `ci_strip_dirs.py`，防 dpkg 回收 ellekit 符号链接）、preinst/postinst/postrm 自愈 ellekit 符号链接 + jbctl trustcache 注册、脚本内绝不 killall 系统进程；Tweak 找回 `/var/tmp` 配置读取路径（修复 relaxin 上定位无效果）；Depends 改回 `mobilesubstrate`（ellekit Provides，避免 ellekit 被当依赖联动卸载） |
 | 1.0.1 | 修复 SpringBoard 崩溃（CLSimulationManager API 对齐 LocSim）+ 修复配置 key 大小写 |
