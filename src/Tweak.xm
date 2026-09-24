@@ -4,6 +4,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 #import "OnyxTileProxy.h"
 
 static NSString *const kDomain = @"com.yzdmm.onyx";
@@ -104,10 +105,10 @@ static void _stopSimulation(CFNotificationCenterRef center, void *observer, CFSt
             _applyPrefs();
             CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                 NULL, _prefsChanged, CFSTR("com.yzdmm.onyx/changed"), NULL,
-                kCFNotificationDeliverImmediately);
+                CFNotificationSuspensionBehaviorDeliverImmediately);
             CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                 NULL, _stopSimulation, CFSTR("com.yzdmm.onyx/stop"), NULL,
-                kCFNotificationDeliverImmediately);
+                CFNotificationSuspensionBehaviorDeliverImmediately);
 
             // 2. 瓦片代拉：SpringBoard 可联网，代 OnyxApp 下载地图瓦片
             [[OnyxTileProxy shared] startObserving];
