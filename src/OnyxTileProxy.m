@@ -1,5 +1,5 @@
-// Onyx Tile Proxy — 由注入进程(SpringBoard, platformized, 可联网)代拉瓦片，
-// 落盘到共享目录供 OnyxApp(无法联网的沙盒 App)读取。
+// Onyx Tile Proxy — 由独立 root daemon(OnyxNetDaemon, platform-application 可联网)代拉瓦片，
+// 落盘到共享目录供 OnyxApp(无法联网的沙盒 mobile App)读取。
 // OnyxApp -> Darwin通知 tilereq + 请求plist -> 本代理下载 -> 写共享缓存 -> Darwin通知 tileok
 //
 // 数据约定:
@@ -9,6 +9,7 @@
 //   结果:  在 url 前加 "ok:" 或 "err:" 前缀写回同一个 tilereq plist,
 //          然后 post "com.yzdmm.onyx/tileok"
 #import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <string.h>
 #import <sys/stat.h>
 #import <stdlib.h>
@@ -17,6 +18,9 @@
 + (instancetype)shared;
 - (void)startObserving;
 @end
+
+static void OnyxTileProxyNotification(CFNotificationCenterRef center, void *observer,
+                                      CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
 @implementation OnyxTileProxy {
     dispatch_queue_t _queue;
@@ -82,7 +86,9 @@ static NSString *CacheDir(void) {
             }
             dispatch_semaphore_t sem = dispatch_semaphore_create(0);
             __block BOOL ok = NO;
-            NSURLRequest *r = [NSURLRequest requestWithURL:[NSURL URLWithString:u2] timeoutInterval:20];
+            NSURLRequest *r = [NSURLRequest requestWithURL:[NSURL URLWithString:u2]
+                                               cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                           timeoutInterval:20];
             NSURLSessionDataTask *t = [session dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *resp, NSError *e){
                 NSHTTPURLResponse *h = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse*)resp : nil;
                 if (!e && d.length > 0 && h.statusCode < 400) {
@@ -107,13 +113,18 @@ static NSString *CacheDir(void) {
 }
 
 - (void)startObserving {
-    // 注意：observer 参数必须传 self，否则回调里的 context(o) 为 nil，请求永远不触发
+    // CFNotificationCenterAddObserver 只接受 C 函数指针(不支持 block)，
+    // 用 observer 参数(传入 self)作为用户上下文，避免回调里上下文为 nil。
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
         (__bridge const void *)self,
-        ^(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u){
-            OnyxTileProxy *p = (__bridge OnyxTileProxy *)o;
-            [p _onTileRequest];
-        },
+        OnyxTileProxyNotification,
         CFSTR("com.yzdmm.onyx/tilereq"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 @end
+
+// Darwin 通知回调：OnyxApp 提交了新的瓦片代拉请求
+static void OnyxTileProxyNotification(CFNotificationCenterRef center, void *observer,
+                                      CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    OnyxTileProxy *proxy = (__bridge OnyxTileProxy *)observer;
+    [proxy _onTileRequest];
+}
