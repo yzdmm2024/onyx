@@ -336,6 +336,18 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
 %end
 
 %ctor {
+    NSString *procName = NSProcessInfo.processInfo.processName;
+    BOOL isSpringBoard = [procName isEqualToString:@"SpringBoard"];
+
+    // SpringBoard 里只跑瓦片代拉，不做任何定位 hook
+    // （SpringBoard 的定位 hook 可能会影响系统定位服务，导致全局位置被改）
+    if (isSpringBoard) {
+        [[OnyxTileProxy shared] startObserving];
+        NSLog(@"[Onyx] loaded (SpringBoard) - tile proxy only, no location hooks");
+        return;
+    }
+
+    // 非 SpringBoard 进程：初始化定位 hook
     s_mgrs = [NSHashTable weakObjectsHashTable];
     _readPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
@@ -345,13 +357,6 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     %init(AMapHooks);
     %init(TencentHooks);
 
-    // 瓦片代拉：只在 SpringBoard 进程里启动
-    NSString *procName = NSProcessInfo.processInfo.processName;
-    if ([procName isEqualToString:@"SpringBoard"]) {
-        [[OnyxTileProxy shared] startObserving];
-        NSLog(@"[Onyx] loaded (SpringBoard) - tile proxy started");
-    } else {
-        NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d",
-              procName, s_enabled, s_hasCoord, _active());
-    }
+    NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d selected=%@",
+          procName, s_enabled, s_hasCoord, _active(), s_selectedApps.allObjects);
 }
