@@ -1,0 +1,11 @@
+﻿#!/bin/sh
+set -e
+# Onyx postinst — refresh icon cache for the standalone app
+if [ -x /var/jb/usr/bin/uicache ]; then
+    /var/jb/usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
+elif [ -x /usr/bin/uicache ]; then
+    /usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
+fi
+# Notify SpringBoard to reload settings
+killall -9 cfprefsd 2>/dev/null || true
+exit 0

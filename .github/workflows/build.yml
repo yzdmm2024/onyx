@@ -54,6 +54,28 @@ jobs:
           echo "--- final packages ---"
           ls -la packages/
 
+          # 3) 手动注入 postinst（theos 有时不会自动打包）
+          for DEB in packages/*.deb; do
+            W=$(mktemp -d)
+            dpkg-deb -x "$DEB" "$W/root"
+            dpkg-deb -e "$DEB" "$W/root/DEBIAN"
+            if [ -f postinst ]; then
+              cp postinst "$W/root/DEBIAN/postinst"
+              chmod 0755 "$W/root/DEBIAN/postinst"
+              echo "injected postinst into $DEB"
+            fi
+            if [ -f prerm ]; then
+              cp prerm "$W/root/DEBIAN/prerm"
+              chmod 0755 "$W/root/DEBIAN/prerm"
+              echo "injected prerm into $DEB"
+            fi
+            rm -f "$DEB"
+            dpkg-deb -b "$W/root" "$DEB"
+            rm -rf "$W"
+          done
+          echo "--- after postinst injection ---"
+          ls -la packages/
+
       - name: Sign OnyxApp entitlements (per arch)
         run: |
           set -e

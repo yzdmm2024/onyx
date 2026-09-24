@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+# Onyx prerm — 卸载前清理
+# 杀掉 cfprefsd 确保配置缓存刷新
+killall -9 cfprefsd 2>/dev/null || true
+# 清理公共路径配置文件
+rm -f /var/tmp/com.yzdmm.onyx.plist 2>/dev/null || true
+rm -f /var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
+rm -f /Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
+exit 0
