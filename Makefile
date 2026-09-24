@@ -8,7 +8,6 @@ TARGET := iphone:clang:14.5:14.0
 #      arm64（无根 Dopamine/palera1n）+ arm64e（隐根 relaxin/RootHide）双出包
 ARCHS = arm64 arm64e
 THEOS_PACKAGE_SCHEME = rootless
-INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
