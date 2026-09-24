@@ -77,6 +77,8 @@ static UIImage *onyx_pinImage(void) {
 
 @interface ONYXAMapView () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UIView *tileLayer;                 // 瓦片画布
+@property (nonatomic, strong) UIImageView *offlineBaseView;      // 离线程序化底图
+@property (nonatomic, strong) UIView *offlineCrossView;          // 离线定位十字线
 @property (nonatomic, strong) UIImageView *pin;                  // 标记
 @property (nonatomic, strong) UILabel *coordLabel;               // 常驻坐标横幅
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIImageView *> *tileViews; // key "z-x-y"
@@ -97,6 +99,8 @@ static UIImage *onyx_pinImage(void) {
 @property (nonatomic, assign) NSUInteger consecFail;             // 连续失败张数
 @property (nonatomic, assign) BOOL reportedFail;
 @property (nonatomic, strong) NSError *lastError;
+@property (nonatomic, assign) BOOL offlineMode;                         // 在线程为离线底图模式
+@property (nonatomic, assign) BOOL offlineRefreshed;
 
 @property (nonatomic, assign) CGPoint panStartOrigin;
 @property (nonatomic, assign) CGFloat pinchStartZoom;
@@ -132,6 +136,8 @@ static UIImage *onyx_pinImage(void) {
     _tileFailCount = 0;
     _consecFail = 0;
     _reportedFail = NO;
+    _offlineMode = NO;
+    _offlineRefreshed = NO;
 
     _tileViews = [NSMutableDictionary dictionary];
     _imgCache = [[NSCache alloc] init];
@@ -145,6 +151,18 @@ static UIImage *onyx_pinImage(void) {
     _tileLayer.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _tileLayer.clipsToBounds = YES;
     [self addSubview:_tileLayer];
+
+    // 离线程序化底图：仅离线模式可见，网络极端不可用时绘制经纬网格兜底，永不空白
+    _offlineBaseView = [[UIImageView alloc] initWithFrame:self.bounds];
+    _offlineBaseView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _offlineBaseView.contentMode = UIViewContentModeScaleToFill;
+    _offlineBaseView.hidden = YES;
+    [self addSubview:_offlineBaseView];
+
+    _offlineCrossView = [[UIView alloc] initWithFrame:CGRectZero];
+    _offlineCrossView.hidden = YES;
+    _offlineCrossView.userInteractionEnabled = NO;
+    [self addSubview:_offlineCrossView];
 
     _pin = [[UIImageView alloc] initWithImage:onyx_pinImage()];
     _pin.hidden = YES;
@@ -204,6 +222,10 @@ static UIImage *onyx_pinImage(void) {
     }
     [self updateVisibleTiles];
     [self refreshPin];
+    if (_offlineMode) {
+        [self drawOfflineBase];
+        [self updateOfflineCross];
+    }
 }
 
 #pragma mark - 源与投影
@@ -328,6 +350,7 @@ static UIImage *onyx_pinImage(void) {
                     _origin = CGPointMake(awp.x - c.x, awp.y - c.y);
                     [self updateVisibleTiles];
                     [self refreshPin];
+                    if (_offlineMode) [self drawOfflineBase];
                 }
             }
             break;
@@ -478,6 +501,8 @@ static UIImage *onyx_pinImage(void) {
             s->_consecFail = 0;
             [s->_imgCache setObject:img forKey:key];
             s->_tileOkCount++;
+            // 瓦片加载成功 → 恢复正常在线模式
+            if (s->_offlineMode) [s leaveOfflineMode];
             UIImageView *iv = s->_tileViews[key];
             if (iv) iv.image = img;
             if (s->_tileOkCount == 1) {
@@ -503,13 +528,15 @@ static UIImage *onyx_pinImage(void) {
     }
     if (!_reportedFail) {
         _reportedFail = YES;
+        // 所有源都失败：进入离线底图兜底，地图永不空白
+        [self enterOfflineMode];
         NSString *msg;
         if (_lastError) {
-            msg = [NSString stringWithFormat:@"%@瓦片加载失败 %@(%ld)", [self sourceName], _lastError.domain, (long)_lastError.code];
+            msg = [NSString stringWithFormat:@"%@瓦片加载失败 %@(%ld)，已切换离线底图", [self sourceName], _lastError.domain, (long)_lastError.code];
         } else if (_tileOkCount > 0) {
-            msg = [NSString stringWithFormat:@"%@部分瓦片加载失败", [self sourceName]];
+            msg = [NSString stringWithFormat:@"%@部分瓦片加载失败，已切换离线底图", [self sourceName]];
         } else {
-            msg = [NSString stringWithFormat:@"%@瓦片加载失败(无网络?)", [self sourceName]];
+            msg = [NSString stringWithFormat:@"%@瓦片加载失败(无网络?)，已切换离线底图", [self sourceName]];
         }
         if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
             [self.delegate amapView:self didUpdateStatus:msg];
@@ -517,11 +544,146 @@ static UIImage *onyx_pinImage(void) {
     }
 }
 
+#pragma mark - 离线程序化底图
+
+// 把世界屏幕坐标(相对 self.bounds)转成显示系经纬度(grid:是否网格线用)
+- (void)drawOfflineBase {
+    if (!_offlineBaseView) return;
+    CGSize sz = self.bounds.size;
+    if (sz.width <= 1 || sz.height <= 1) return;
+    UIGraphicsBeginImageContextWithOptions(sz, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+    // 背景：淡色渐变（模拟陆地/海洋）
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGFloat cols[8] = {0.93,0.96,1.0,1.0, 0.85,0.90,0.96,1.0};
+    CGGradientRef grad = CGGradientCreateWithColorComponents(cs, cols, NULL, 2);
+    CGContextDrawLinearGradient(ctx, grad, CGPointMake(0,0), CGPointMake(0, sz.height), 0);
+    CGColorSpaceRelease(cs); CGGradientRelease(grad);
+
+    // 当前可视世界像素矩形 -> 经纬度范围
+    CGPoint topLeftWorld = CGPointMake(_origin.x, _origin.y);
+    CGPoint botRightWorld = CGPointMake(_origin.x+sz.width, _origin.y+sz.height);
+    CLLocationCoordinate2D tl = onyx_worldToLonlat(topLeftWorld, _zoom);
+    CLLocationCoordinate2D bl = onyx_worldToLonlat(CGPointMake(topLeftWorld.x, botRightWorld.y), _zoom);
+
+    // 依据 zoom 选网格间隔
+    double step = 1.0;
+    switch (_zoom) {
+        case 0 ... 2: step = 45.0; break;
+        case 3 ... 5: step = 10.0; break;
+        case 6 ... 8: step = 5.0;  break;
+        case 9 ... 11: step = 1.0; break;
+        case 12 ... 13: step = 0.5; break;
+        case 14: step = 0.2; break;
+        case 15: step = 0.1; break;
+        case 16: step = 0.05; break;
+        default: step = 0.02; break;
+    }
+    // 屏幕上的经纬线像素密度阈值，防止太密
+    double xPerDeg = sz.width / MAX(0.0001, (onyx_worldToLonlat(botRightWorld, _zoom).longitude - tl.longitude));
+    while (step * xPerDeg < 18.0) step *= 2.0;
+
+    // 纵向经线 + 横向纬线
+    CGContextSetLineWidth(ctx, 1.0);
+    // 经线
+    double lonStart = floor(tl.longitude / step) * step;
+    for (double lon = lonStart; lon <= (onyx_worldToLonlat(botRightWorld, _zoom).longitude); lon += step) {
+        CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(tl.latitude, lon), _zoom);
+        CGFloat vx = wp.x - _origin.x;
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.12].CGColor);
+        CGContextMoveToPoint(ctx, vx, 0);
+        CGContextAddLineToPoint(ctx, vx, sz.height);
+        CGContextStrokePath(ctx);
+    }
+    // 纬线
+    double latStart = floor(bl.latitude / step) * step;
+    for (double lat = latStart; lat <= tl.latitude; lat += step) {
+        CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(lat, tl.longitude), _zoom);
+        CGFloat vy = wp.y - _origin.y;
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.12].CGColor);
+        CGContextMoveToPoint(ctx, 0, vy);
+        CGContextAddLineToPoint(ctx, sz.width, vy);
+        CGContextStrokePath(ctx);
+    }
+
+    // 高清大网格（加粗的度线）
+    double bigStep = 1.0;
+    while (bigStep < step) bigStep *= 2.0;
+    CGContextSetLineWidth(ctx, 1.2);
+    double bigLon = floor(tl.longitude / bigStep) * bigStep;
+    for (double lon = bigLon; lon <= (onyx_worldToLonlat(botRightWorld, _zoom).longitude); lon += bigStep) {
+        CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(tl.latitude, lon), _zoom);
+        CGFloat vx = wp.x - _origin.x;
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.22].CGColor);
+        CGContextMoveToPoint(ctx, vx, 0); CGContextAddLineToPoint(ctx, vx, sz.height); CGContextStrokePath(ctx);
+    }
+    double bigLat = floor(bl.latitude / bigStep) * bigStep;
+    for (double lat = bigLat; lat <= tl.latitude; lat += bigStep) {
+        CGPoint wp = onyx_lonlatToWorld(CLLocationCoordinate2DMake(lat, tl.longitude), _zoom);
+        CGFloat vy = wp.y - _origin.y;
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:0.0 alpha:0.22].CGColor);
+        CGContextMoveToPoint(ctx, 0, vy); CGContextAddLineToPoint(ctx, sz.width, vy); CGContextStrokePath(ctx);
+    }
+
+    // 中央定位十字
+    CGContextSetLineWidth(ctx, 1.6);
+    [[UIColor systemRedColor] setStroke];
+    CGFloat cx = sz.width*0.5, cy = sz.height*0.5;
+    CGContextMoveToPoint(ctx, cx-16, cy); CGContextAddLineToPoint(ctx, cx+16, cy); CGContextStrokePath(ctx);
+    CGContextMoveToPoint(ctx, cx, cy-16); CGContextAddLineToPoint(ctx, cx, cy+16); CGContextStrokePath(ctx);
+    CGContextSetFillColorWithColor(ctx, [UIColor systemRedColor].CGColor);
+    CGContextFillEllipseInRect(ctx, CGRectMake(cx-3, cy-3, 6, 6));
+
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    _offlineBaseView.image = img;
+}
+
+// 更新离线定位十字（跟随真实 or 模拟坐标)
+- (void)updateOfflineCross {
+    if (!_offlineMode || !_hasCenter) {
+        _offlineCrossView.hidden = YES;
+        return;
+    }
+    CGPoint wp = onyx_lonlatToWorld([self displayCenter], _zoom);
+    CGFloat vx = wp.x - _origin.x;
+    CGFloat vy = wp.y - _origin.y;
+    if (vx < -50 || vx > self.bounds.size.width+50 || vy < -50 || vy > self.bounds.size.height+50) {
+        _offlineCrossView.hidden = YES;
+        return;
+    }
+    _offlineCrossView.center = CGPointMake(vx, vy);
+    _offlineCrossView.hidden = NO;
+    [self addSubview:_offlineCrossView];
+}
+
+- (void)enterOfflineMode {
+    if (_offlineMode) { [self drawOfflineBase]; return; }
+    _offlineMode = YES;
+    _offlineRefreshed = NO;
+    [self drawOfflineBase];
+    [self addSubview:_offlineBaseView];
+    _offlineBaseView.hidden = NO;
+    // 隐藏 tileLayer 避免空白瓦片闪烁
+    _tileLayer.hidden = YES;
+    [self updateOfflineCross];
+}
+
+- (void)leaveOfflineMode {
+    if (!_offlineMode) return;
+    _offlineMode = NO;
+    _offlineBaseView.hidden = YES;
+    _tileLayer.hidden = NO;
+    _offlineCrossView.hidden = YES;
+}
+
 #pragma mark - 标记与坐标横幅
 
 - (void)refreshPin {
     if (!_hasCenter || !_showMarker) {
         _pin.hidden = YES;
+        [self updateOfflineCross];
         return;
     }
     CGPoint wp = onyx_lonlatToWorld([self displayCenter], _zoom);
@@ -529,6 +691,8 @@ static UIImage *onyx_pinImage(void) {
     CGFloat vy = wp.y - _origin.y;
     _pin.center = CGPointMake(vx, vy - 17); // 图钉尖端对准该点
     _pin.hidden = NO;
+    // 离线模式下十字标记跟随同一坐标
+    [self updateOfflineCross];
     if (_pin.superview != self) [self addSubview:_pin]; // 保证在最上层
 }
 
@@ -590,6 +754,7 @@ static UIImage *onyx_pinImage(void) {
     _origin = CGPointMake(awp.x - c.x, awp.y - c.y);
     [self updateVisibleTiles];
     [self refreshPin];
+    if (_offlineMode) [self drawOfflineBase];
 }
 
 // 网络环境变化（如刚开 VPN）后手动刷新：回到默认源并重新加载全部瓦片
@@ -599,6 +764,7 @@ static UIImage *onyx_pinImage(void) {
     _consecFail = 0;
     _reportedFail = NO;
     _lastError = nil;
+    [self leaveOfflineMode];
     [self applySourceIndex:0 animated:NO];
     [self updateCoordLabel];
     if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {

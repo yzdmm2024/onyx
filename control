@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.9
+Version: 0.5.9.1
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.9 修复：1）点「恢复」后地图红色光标会请求一次真实定位并移回真实地址，看地图即知已恢复；2）快速定位输入框键盘弹出后滚动修正，完整显示正在输入的文字。v0.5.8 恢复系统级全局模拟：保存/开始即对 locationd 全局注入坐标，所有使用系统定位的 App（含百度/高德/腾讯/微信）同时生效；「恢复」按钮（刷新旁）为回到真实位置的唯一开关，仅点击才停止模拟并清掉 locationd 残留。历史记录下方「记忆功能」开关：开启时进入 App 恢复上次模拟位置（除非点了恢复）。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.5.9.1 新增程序化离线底图（纯本机网络即可用，不依赖任何 VPN/代理）：高德->高德webst->OSM 三源全失败时自动切换为程序化绘制的经纬网格底图，地图永不空白；网络恢复或手动刷新自动回到在线瓦片。瓦片请求走系统默认通道，用运营商卡/普通WiFi直连高德国内CDN即可正常出图，无需开启任何加速软件。v0.5.9 修复点「恢复」后地图光标回真实位置、快速定位输入框键盘遮挡。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
