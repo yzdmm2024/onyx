@@ -7,9 +7,12 @@
 // CFPreferences（cfprefsd），否则 Tweak 读不到新配置导致定位失效 / 选中不生效。
 
 // rootless 优先，回退标准路径（与 Tweak.xm _onyxLoadPlist 的候选路径一致）
+// /var/tmp 公共路径优先：沙盒 App 也能读到
 static inline NSString *OnyxPrefsPlistPath(void) {
-    NSString *a = @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist";
+    NSString *a = @"/var/tmp/com.yzdmm.onyx.plist";
     if ([[NSFileManager defaultManager] isWritableFileAtPath:a]) return a;
+    NSString *b = @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist";
+    if ([[NSFileManager defaultManager] isWritableFileAtPath:b]) return b;
     return @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist";
 }
 
@@ -24,13 +27,16 @@ static inline id OnyxPrefsRead(NSString *key) {
     return out;
 }
 
-// 写：CFPreferences + 直写 plist 文件（两个候选路径都写，原子写），并立即同步给各进程的 Tweak。
+// 写：CFPreferences + 直写 plist 文件（多路径都写，原子写），并立即同步给各进程的 Tweak。
+// 关键：/var/tmp 是所有 App 都能读的公共路径（沙盒不限制），
+//       Tweak 注入普通 App 后优先从这里读，解决沙盒隔离导致读不到配置的问题。
 static inline void OnyxPrefsWrite(NSString *key, id value) {
     CFStringRef domain = CFSTR("com.yzdmm.onyx");
     CFPreferencesSetValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value,
                           domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    // 两个候选路径都写，保证 Tweak（rootless 优先读 /var/jb）一定能读到
+    // 多路径都写，保证 Tweak 一定能读到（按优先级）
     NSArray<NSString *> *paths = @[
+        @"/var/tmp/com.yzdmm.onyx.plist",           // 公共路径：所有 App 可读
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
     ];

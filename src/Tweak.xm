@@ -39,8 +39,10 @@ static BOOL s_enabled = NO;
 static NSSet<NSString *> *s_excludedApps = nil;
 
 // 直接读取 plist，绕过 cfprefsd 在 rootless / RootHide 下的跨进程隔离
+// 优先读 /var/tmp 公共路径（沙盒 App 也能读到），再回退标准路径
 static NSDictionary *_onyxLoadPlist(void) {
     NSArray<NSString *> *cands = @[
+        @"/var/tmp/com.yzdmm.onyx.plist",             // 公共路径：所有 App 可读
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/jb/mobile/Library/Preferences/com.yzdmm.onyx.plist",
