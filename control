@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.5.9.5
+Version: 0.5.9.6
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.5.9.5 代拉加速：daemon 6并发下载(原串行) + 请求目录队列化(不再单plist覆盖丢请求) + 超时智能重置(有新瓦片就续时不轻易离线)，地图加载速度大幅提升且更稳定。v0.5.9.4 新增独立root常驻daemon代拉瓦片。v0.5.9.3 无网强兜底：OSM源一次失败立即进离线程序化底图。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.5.9.6 去掉独立 LaunchDaemon（避免被钉钉等反作弊扫到异常 daemon 判定虚拟打卡），瓦片代拉改回 SpringBoard 注入承载，保留 6 并发+请求目录队列化+智能超时等加速优化，定位模拟稳定不暴露。v0.5.9.5 代拉加速 6 并发。v0.5.9.3 无网强兜底。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。

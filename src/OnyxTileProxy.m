@@ -145,7 +145,7 @@ static NSString *ReqDir(void) {
         return;
     }
     
-    NSLog(@"[OnyxNetDaemon] downloading %lu tiles (concurrent=%ld)",
+    NSLog(@"[OnyxTileProxy] downloading %lu tiles (concurrent=%ld)",
           (unsigned long)toDownload.count, (long)kMaxConcurrent);
     
     // 并行下载：用 dispatch_semaphore 控制并发数

@@ -4,6 +4,7 @@
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import "OnyxTileProxy.h"
 
 // ---- 第三方定位 SDK 的最小桩声明（仅编译期需要，运行期 Hook 真实类） ----
 // 这些类的真实头文件在编译期不可见，theos 只会生成 @class 前向声明，
@@ -390,5 +391,7 @@ static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const v
     %init(BaiduHooks);
     %init(AMapHooks);
     %init(TencentHooks);
+    // 瓦片代拉代理：注入 SpringBoard（platformized 可联网），6 并发 + 请求目录队列化
+    [[OnyxTileProxy shared] startObserving];
     NSLog(@"[Onyx] loaded (enabled=%d hasCoord=%d bid=%@ selected=%@)", s_enabled, s_hasCoord, NSBundle.mainBundle.bundleIdentifier, s_selectedApps.allObjects);
 }

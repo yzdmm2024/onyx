@@ -64,21 +64,9 @@ jobs:
             dpkg-deb -e "$DEB" "$W/root/DEBIAN"
             # 用 ldid 把 entitlements 签进 App 二进制（locationd.simulation / network / 定位等）
             APP=$(find "$W/root" -name OnyxApp -type f | head -1)
-            if [ -n "$APP" ]; then
-              ldid -SApp/OnyxApp.entitlements "$APP"
-              echo "SIGNED APP $APP"
-            else
-              echo "WARN: OnyxApp 未在 $DEB 中找到"
-            fi
-            # 签网络代拉 daemon（platform-application + 去沙盒 + network.client）
-            DAEMON=$(find "$W/root" -name OnyxNetDaemon -type f | head -1)
-            if [ -n "$DAEMON" ]; then
-              ldid -Sdaemon/OnyxNetDaemon.entitlements "$DAEMON"
-              echo "SIGNED DAEMON $DAEMON"
-            else
-              echo "FAIL: 未找到 OnyxNetDaemon -> $DEB"
-              exit 1
-            fi
+            if [ -z "$APP" ]; then echo "FAIL: OnyxApp 未在 $DEB 中找到"; exit 1; fi
+            ldid -SApp/OnyxApp.entitlements "$APP"
+            echo "SIGNED $APP"
             rm -f "$DEB"
             dpkg-deb -b "$W/root" "$DEB"
             echo "REPACKED $DEB"
@@ -92,14 +80,8 @@ jobs:
             dpkg-deb -x "$DEB" "$W/root"
             APP=$(find "$W/root" -name OnyxApp -type f | head -1)
             ldid -e "$APP" 2>/dev/null | grep -q 'com.apple.locationd.simulation' \
-              && echo "OK app ents: $DEB" \
-              || { echo "FAIL: OnyxApp 未签入 entitlements -> $DEB"; exit 1; }
-            DAEMON=$(find "$W/root" -name OnyxNetDaemon -type f | head -1)
-            DE=$(ldid -e "$DAEMON" 2>/dev/null || true)
-            echo "$DE" | grep -q 'platform-application' \
-              && echo "$DE" | grep -q 'network.client' \
-              && echo "OK daemon ents: $DEB" \
-              || { echo "FAIL: OnyxNetDaemon 未签入网络 entitlements -> $DEB"; exit 1; }
+              && echo "OK ents: $DEB" \
+              || { echo "FAIL: 未签入 entitlements -> $DEB"; exit 1; }
           done
 
       - name: Upload deb artifacts
