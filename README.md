@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.1.0**
+> 当前版本：**1.2.0**
 
 ---
 
@@ -17,16 +17,40 @@
 
 ### 关于反作弊检测（重要）
 
-| 检测维度 | v1.1.0 做法 |
+| 检测维度 | v1.2.0 做法 |
 |---|---|
 | 注入范围 | **注入所有 App 进程**（per-app hook 才能让第三方 App 生效），钉钉等进程里会有 Onyx dylib |
 | 模拟方式 | Hook `CoreLocation` / 地图 SDK，App 读到的坐标即被替换 |
 | App 名称 | 显示名 `GO~`，图标为紫色渐变"GO"字样，不像定位工具 |
 
-> ⚠️ **v1.1.0 为让第三方 App 一定生效，改回了 per-app hook（dylib 注入所有 App）。**
+> ⚠️ **v1.2.0 为让第三方 App 一定生效，保持 per-app hook（dylib 注入所有 App）。**
 > 这意味着钉钉这类反作弊 App **能扫到自己进程里的 Onyx dylib**，可能报"使用虚拟定位"。
 > 若你需要避开钉钉检测，请把它加入**黑名单**（黑名单里保持真实定位），或直接只用系统级模拟（后续可加进程白名单过滤）。
 > 之前 v0.5.x–v0.7.x 走 per-app hook 也被钉钉扫到；v1.0.x 改成只注入 SpringBoard 虽然检测不到，但第三方 App 拿不到假坐标（就是本次要修的问题）。**两难取其一：要覆盖所有 App，就接受可被检测。**
+
+### v1.2.0 修的是什么（定位改了 App 仍显示真实位置）
+
+v1.1.0 的 `startUpdatingLocation` 是**先 `%orig`（真的启动 GPS）再推一帧假坐标**。
+App 的 delegate 因此**同时收到真、假两帧**，而 App 普遍采用「以最后一次定位为准」，
+真实那帧照常在假帧之后到达 → 覆盖掉假坐标。表现就是"改了定位，App 还是显示真实位置"。
+
+v1.2.0 改为：
+
+1. 启用时**完全不启动真实定位**（`startUpdatingLocation` 直接拦截，不调 `%orig`），只推假坐标；
+2. **接管 delegate 回调** `locationManager:didUpdateLocations:`，运行时扫描全类，把回调数组直接替换成假坐标 —— 不管 App 用哪个类当 delegate 都盖得住；
+3. 补全 iOS 15+ 的 `requestLocationWithCompletionHandler:` 与授权状态伪装（`locationServicesEnabled` / `authorizationStatus` 返回 `AuthorizedAlways`，放行"先查权限再请求"的分支）。
+
+### 排查：诊断日志
+
+改完还是无效时，用日志定位，别再盲调：
+
+- 日志路径：**`/var/tmp/onyx_debug.log`**
+- 打开 Onyx App → 主界面底部「**诊断日志**」按钮 → 直接看到内容，截图/复制发来即可
+- 每次进程加载都会**强制写一行 BOOT**，格式：
+  `=== Onyx v1.2.0 BOOT proc=<进程名> bundle=<bundle id> plist=hit|MISS enabled=0|1 hasCoord=0|1 lat=.. lng=.. ===`
+  - `plist=MISS enabled=0` → 配置没写进去 / 路径不对
+  - 日志里**完全没有** `startUpdatingLocation` 相关行 → 这个 App 压根没走 `CLLocationManager`（可能用 IP 定位或自家 SDK），需要换拦截点
+- 日志上限 512KB 自动截断，不会撑爆磁盘
 
 ---
 

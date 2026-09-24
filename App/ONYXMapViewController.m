@@ -314,6 +314,48 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     // 黑名单：点开后可把「不需要改定位」的 App 加进去（这些 App 保持真实位置）
     UIButton *blacklistButton = [self buttonWithTitle:@"黑名单（排除应用）" color:[UIColor systemPurpleColor] action:@selector(openAppsList:)];
     [stack addArrangedSubview:blacklistButton];
+
+    // 诊断日志：修改定位无效时，进这里看 Tweak 到底有没有生效
+    UIButton *diagButton = [self buttonWithTitle:@"诊断日志" color:[UIColor systemOrangeColor] action:@selector(openDiagLog:)];
+    [stack addArrangedSubview:diagButton];
+}
+
+// 打开诊断日志页面（仅供排查）
+- (void)openDiagLog:(id)sender {
+    UIViewController *vc = [[UIViewController alloc] init];
+    vc.title = @"诊断日志";
+    vc.view.backgroundColor = [UIColor systemBackgroundColor];
+
+    UITextView *tv = [[UITextView alloc] initWithFrame:vc.view.bounds];
+    tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    tv.font = [UIFont fontWithName:@"Menlo" size:11];
+    tv.editable = NO;
+    [vc.view addSubview:tv];
+
+    NSString *log = [NSString stringWithContentsOfFile:@"/var/tmp/onyx_debug.log"
+                                              encoding:NSUTF8StringEncoding error:nil];
+    if (!log || log.length == 0) {
+        tv.text = @"日志为空。\n\nTweak 可能没有注入到本进程，或 plist 未写入。\n"
+                  @"先确认：状态是否显示「已启用」。";
+    } else {
+        // 只保留最后 300 行，避免卡顿
+        NSArray<NSString *> *lines = [log componentsSeparatedByString:@"\n"];
+        if (lines.count > 300) lines = [lines subarrayWithRange:NSMakeRange(lines.count - 300, 300)];
+        tv.text = [lines componentsJoinedByString:@"\n"];
+    }
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    [close setTitle:@"关闭" forState:UIControlStateNormal];
+    close.frame = CGRectMake(0, 0, 60, 44);
+    close.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+    [close addTarget:self action:@selector(dismissDiagLog) forControlEvents:UIControlEventTouchUpInside];
+    vc.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:close];
+
+    [self.navigationController pushViewController:vc animated:YES];
+}
+
+- (void)dismissDiagLog {
+    [self.navigationController popViewControllerAnimated:YES];
 }
 
 - (UILabel *)label:(NSString *)title value:(NSString *)value {
