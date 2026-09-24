@@ -190,7 +190,7 @@ static CLLocation *_fakeLocation(void) {
 
 // ---------------- delegate 回调接管（v1.2.0 核心） ----------------
 // 回调接管实现（定义在下方，先前向声明）
-static void ony_didUpdate(id self, SEL _cmd, id mgr, NSArray *locs);
+static void ony_didUpdateLocations(id self, SEL _cmd, id mgr, NSArray *locs);
 
 typedef struct { Class cls; IMP orig; } OnyxHookRec;
 static OnyxHookRec *g_recs = NULL;
@@ -250,7 +250,7 @@ static void OnyxScanAllDelegates(void) {
     s_scanning = NO;
 }
 
-static void ony_didUpdate(id self, SEL _cmd, id mgr, NSArray *locs) {
+static void ony_didUpdateLocations(id self, SEL _cmd, id mgr, NSArray *locs) {
     BOOL act = _active();
     NSArray *outArr = locs;
     if (act) {
