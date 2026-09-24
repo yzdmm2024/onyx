@@ -11,9 +11,9 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Onyx</string>
+    <string>GO</string>
     <key>CFBundleDisplayName</key>
-    <string>定位模拟</string>
+    <string>GO</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFiles</key>
@@ -38,9 +38,9 @@
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.9.3</string>
+	<string>0.6.2</string>
     <key>CFBundleVersion</key>
-    <string>0.5.9.3</string>
+    <string>0.6.2</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIApplicationSceneManifest</key>
@@ -62,9 +62,9 @@
     <true/>
 
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Onyx 需要定位权限以在地图上显示当前位置和模拟位置。</string>
+    <string>需要定位权限以在地图上显示当前位置。</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Onyx 在后台也需要定位权限以保持位置模拟生效。</string>
+    <string>后台定位权限用于持续记录轨迹。</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>
