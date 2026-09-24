@@ -22,7 +22,7 @@ Onyx_FRAMEWORKS = UIKit Foundation CoreLocation CoreGraphics
 
 # ===== 网络代拉 Daemon（独立 root launchd 进程，唯一按 tile 下载者）=====
 TOOL_NAME = OnyxNetDaemon
-OnyxNetDaemon_FILES = src/OnyxNetDaemon.m src/OnyxTileProxy.m src/OnyxTileProxy.h
+OnyxNetDaemon_FILES = src/OnyxNetDaemon.m src/OnyxTileProxy.m
 OnyxNetDaemon_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -w
 OnyxNetDaemon_FRAMEWORKS = Foundation
 OnyxNetDaemon_INSTALL_PATH = /usr/bin
