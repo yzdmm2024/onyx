@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 0.7.0
+Version: 0.7.1
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v0.7.0 黑名单模式：默认所有被注入的App都用虚拟定位，勾选哪个App就排除哪个(用真实位置)。钉钉等打卡App直接加入黑名单即可安全打卡。SpringBoard只跑瓦片代拉不hook定位。App图标/名称隐身优化。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v0.7.1 彻底移除 CLSimulationManager 系统级模拟，纯 Tweak per-app hook 模式，黑名单机制真正生效（勾选=排除=真实位置），钉钉等打卡 App 加入黑名单即用真实位置+检测不到。App图标/名称隐身优化。瓦片代拉6并发加速。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。

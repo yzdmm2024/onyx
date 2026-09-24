@@ -4,7 +4,6 @@
 #import "ONYXAMapView.h"
 #import "ONYXHistoryViewController.h"
 #import "ONYXActiveAppsViewController.h"
-#import "ONYXLocationSimulator.h"
 #import "ONYXPrefs.h"
 #import <CoreLocation/CoreLocation.h>
 #import <math.h>
@@ -385,10 +384,9 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     }
     // 记忆开启：恢复上次模拟状态；关闭：每次进入都停止模拟
     if (enObj) self.running = memory ? [enObj boolValue] : NO;
-    // 恢复系统级模拟（0.5.0 机制）：记忆状态下若处于运行中，直接对 locationd 全局注入
+    // Tweak-only 模式：通过 prefs + Darwin 通知让注入进程生效
     if (self.running) {
-        [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude
-                                                                   longitude:self.currentCoord.longitude];
+        [self notifyTweak];
     }
     [self updateStatus];
     [self loadRecent];
@@ -435,10 +433,10 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
 - (void)saveTapped:(UIButton *)sender {
     self.running = YES;
-    [self startSystemSimulation]; // 全局注入 locationd（0.5.0 机制）
     [self saveState];
+    [self notifyTweak];
     [self updateStatus];
-    NSString *msg = @"已启用模拟。所有使用系统定位的 App（含百度/高德/微信等）都会收到所选坐标。在「排除应用」中勾选的 App 仍使用真实位置。";
+    NSString *msg = @"已启用模拟。所有被注入的 App 默认都会收到所选坐标。在「排除应用（黑名单）」中勾选的 App 仍使用真实位置。";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -446,38 +444,38 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
 - (void)applyTapped:(UIButton *)sender {
     self.running = YES;
-    [self startSystemSimulation];
     [self saveState];
+    [self notifyTweak];
     [self updateStatus];
 }
 
 - (void)startTapped:(UIButton *)sender {
     self.running = YES;
-    [self startSystemSimulation];
     [self saveState];
+    [self notifyTweak];
     [self updateStatus];
 }
 
 - (void)stopTapped:(UIButton *)sender {
     self.running = NO;
-    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
     [self saveState];
+    [self notifyTweak];
     [self updateStatus];
 }
 
-// 启动系统级全局模拟：写入坐标并注入 locationd
-- (void)startSystemSimulation {
-    [[ONYXLocationSimulator sharedSimulator] startSimulationWithLatitude:self.currentCoord.latitude
-                                                               longitude:self.currentCoord.longitude];
+// 通知 Tweak 配置变化（Darwin 通知 + 确保 prefs 已落盘）
+- (void)notifyTweak {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        CFSTR("com.yzdmm.onyx/changed"), NULL, NULL, YES);
 }
 
 - (void)restoreTapped:(id)sender {
-    // 恢复真实位置：先清掉 locationd 里残留的系统级模拟状态
-    [[ONYXLocationSimulator sharedSimulator] stopSimulation];
+    // 恢复真实位置：关闭模拟开关
     self.running = NO;
     [self saveState];
+    [self notifyTweak];
     [self updateStatus];
-    // 请求一次真实位置，把地图红色光标移回真实地址（看地图即知已恢复）
+    // 请求一次真实位置，把地图红色光标移回真实地址
     [self fetchRealLocation];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已恢复真实位置"
                                                                    message:@"已停止模拟，所有 App 都回到真实定位。地图光标正在回到你的真实位置…"

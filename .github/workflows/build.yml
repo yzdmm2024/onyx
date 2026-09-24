@@ -79,9 +79,10 @@ jobs:
             W=$(mktemp -d)
             dpkg-deb -x "$DEB" "$W/root"
             APP=$(find "$W/root" -name OnyxApp -type f | head -1)
-            ldid -e "$APP" 2>/dev/null | grep -q 'com.apple.locationd.simulation' \
+            if [ -z "$APP" ]; then echo "FAIL: OnyxApp 未找到 -> $DEB"; exit 1; fi
+            ldid -e "$APP" 2>/dev/null | grep -q 'platform-application' \
               && echo "OK ents: $DEB" \
-              || { echo "FAIL: 未签入 entitlements -> $DEB"; exit 1; }
+              || { echo "FAIL: 未签入 platform-application -> $DEB"; exit 1; }
           done
 
       - name: Upload deb artifacts
