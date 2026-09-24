@@ -1,6 +1,7 @@
 #import "ONYXAMapView.h"
 #import "ONYXCoordTransform.h"
 #import <math.h>
+#import <CommonCrypto/CommonDigest.h>
 
 // 自绘瓦片地图（无 MKMapView）。
 // 布局：self 上先放 _tileLayer（瓦片画布），再放标记 _pin，最后放常驻坐标横幅 _coordLabel。
@@ -86,6 +87,10 @@ static UIImage *onyx_pinImage(void) {
 @property (nonatomic, strong) NSMutableSet<NSString *> *inflight;
 @property (nonatomic, strong) NSURLSession *session;
 
+@property (nonatomic, strong) NSMutableSet<NSString *> *proxyInFlight;  // 已提交代拉的瓦片 key
+@property (nonatomic, assign) NSTimeInterval proxyLastRequestAt;        // 批量提交节流
+@property (nonatomic, assign) BOOL hasProxyWaitStarted;                 // 代拉结果轮询已开始(30s超时计时)
+
 @property (nonatomic, assign) NSInteger zoom;
 @property (nonatomic, assign) CGPoint origin;                    // 世界像素坐标(自左上角)，坐标系随源
 @property (nonatomic, assign) BOOL originValid;
@@ -142,6 +147,8 @@ static UIImage *onyx_pinImage(void) {
     _tileViews = [NSMutableDictionary dictionary];
     _imgCache = [[NSCache alloc] init];
     _inflight = [NSMutableSet set];
+    _proxyInFlight = [NSMutableSet set];
+    _proxyLastRequestAt = 0;
     // 坑：越狱 platform-app/container-required=false 的 App，使用自定义
     // NSURLSessionConfiguration 时可能无法建立出站连接（系统代理/ATS 被绕过）。
     // [NSURLSession sharedSession] 走系统默认通道，反而更容易成功。
@@ -200,6 +207,14 @@ static UIImage *onyx_pinImage(void) {
     dbl.numberOfTapsRequired = 2;
     dbl.delegate = self;
     [self addGestureRecognizer:dbl];
+
+    // 监听代拉瓦片结果（注入进程下载完成后发 Darwin 通知）
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+        ^(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u){
+            __typeof(self) me = (__bridge id)o;
+            [me handleProxyResult];
+        },
+        CFSTR("com.yzdmm.onyx/tileok"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
     UILongPressGestureRecognizer *longp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
     longp.minimumPressDuration = 0.5;
@@ -450,58 +465,61 @@ static UIImage *onyx_pinImage(void) {
 - (void)loadTileForKey:(NSString *)key x:(int)x y:(int)y z:(NSInteger)z https:(BOOL)https {
     [_inflight addObject:key];
     NSString *urlstr = [self tileURLForX:x y:y z:z https:https];
+
+    // 先查共享缓存（注入进程可能已代拉好）
+    UIImage *cached = [self _tileFromSharedCache:urlstr];
+    if (cached) {
+        [_imgCache setObject:cached forKey:key];
+        [_inflight removeObject:key];
+        _tileOkCount++;
+        UIImageView *iv = _tileViews[key];
+        if (iv) iv.image = cached;
+        if (_offlineMode) [self leaveOfflineMode];
+        [self updateCoordLabel];
+        return;
+    }
+
+    // 不在缓存：交给注入进程代拉（OnyxApp 自身在此环境无法出站联网）
+    [self _submitProxyRequests:@[urlstr]];
+
+    // 原直连 NSURLSession 保底：若设备其实能联网（如无越狱沙盒限制的环境）仍可用
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlstr]
                                                        cachePolicy:NSURLRequestUseProtocolCachePolicy
                                                    timeoutInterval:15];
-    // 模拟 Safari UA，部分 CDN 会校验
     [req setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
             forHTTPHeaderField:@"User-Agent"];
-    NSLog(@"[OnyxTile] fetch %@", urlstr);
+    NSLog(@"[OnyxTile] direct fetch %@", urlstr);
     __weak typeof(self) wself = self;
     NSURLSessionDataTask *task = [_session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         __strong typeof(self) s = wself;
         if (!s) return;
         NSHTTPURLResponse *http = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)resp : nil;
-        NSLog(@"[OnyxTile] resp %@ status=%ld data=%lu err=%@", urlstr, (long)(http.statusCode), (unsigned long)data.length, error);
+        NSLog(@"[OnyxTile] direct resp %@ status=%ld data=%lu err=%@", urlstr, (long)(http.statusCode), (unsigned long)data.length, error);
         if (error || !data.length || (http && http.statusCode >= 400)) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (![s->_inflight containsObject:key]) return; // 已切源，忽略
-                [s->_inflight removeObject:key];
-                s->_tileFailCount++;
+                // 直连失败：不立即判失败，交给代拉机制（等 tileok）
                 s->_lastError = error;
-                // 高德源 https 失败先降级 http
+                // 高德源 https 失败先降级 http（同步给代理请求）
                 if (https && s->_srcIndex < 2) {
                     [s loadTileForKey:key x:x y:y z:z https:NO];
                     return;
                 }
-                [s handleTileFail];
             });
             return;
         }
         UIImage *img = [UIImage imageWithData:data];
         if (!img) {
-            NSLog(@"[OnyxTile] not image: %@ bytes=%lu", urlstr, (unsigned long)data.length);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (![s->_inflight containsObject:key]) return;
-                [s->_inflight removeObject:key];
-                s->_tileFailCount++;
-                s->_lastError = [NSError errorWithDomain:@"OnyxTile" code:-2
-                                                userInfo:@{NSLocalizedDescriptionKey: @"服务器返回非图片数据"}];
-                if (https && s->_srcIndex < 2) {
-                    [s loadTileForKey:key x:x y:y z:z https:NO];
-                    return;
-                }
-                [s handleTileFail];
-            });
+            NSLog(@"[OnyxTile] direct not image: %@ bytes=%lu", urlstr, (unsigned long)data.length);
             return;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             if (![s->_inflight containsObject:key]) return; // 已切源，忽略旧请求
             [s->_inflight removeObject:key];
+            @synchronized (s->_proxyInFlight) { [s->_proxyInFlight removeObject:urlstr]; }
             s->_consecFail = 0;
             [s->_imgCache setObject:img forKey:key];
             s->_tileOkCount++;
-            // 瓦片加载成功 → 恢复正常在线模式
             if (s->_offlineMode) [s leaveOfflineMode];
             UIImageView *iv = s->_tileViews[key];
             if (iv) iv.image = img;
@@ -514,6 +532,121 @@ static UIImage *onyx_pinImage(void) {
         });
     }];
     [task resume];
+}
+
+// ---------- Tweak 代拉瓦片：OnyxApp 无法自联网络，由注入进程帮忙下载 ----------
+
+static NSString *OnyxTileCacheDir(void) {
+    static NSString *dir;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dir = @"/var/mobile/Library/OnyxTileCache";
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+    });
+    return dir;
+}
+
+static NSString *OnyxTileSHA1(NSString *s) {
+    const char *cstr = [s UTF8String];
+    unsigned char digest[20];
+    CC_SHA1(cstr, (CC_LONG)strlen(cstr), digest);
+    NSMutableString *out = [NSMutableString stringWithCapacity:40];
+    for (int i=0;i<20;i++) [out appendFormat:@"%02x", digest[i]];
+    return out;
+}
+
+// 共享缓存路径（与注入进程一致：/var/mobile/Library/OnyxTileCache/<sha1(url)>）
+- (NSString *)_sharedCachePathForURL:(NSString *)url {
+    return [OnyxTileCacheDir() stringByAppendingPathComponent:OnyxTileSHA1(url)];
+}
+
+// 从共享缓存读瓦片（已由注入进程代拉下载好）
+- (UIImage *)_tileFromSharedCache:(NSString *)url {
+    NSString *p = [self _sharedCachePathForURL:url];
+    NSData *d = [NSData dataWithContentsOfFile:p];
+    return d.length ? [UIImage imageWithData:d] : nil;
+}
+
+// 提交代拉请求：把一批瓦片 URL 写进请求 plist 并发 Darwin 通知；带节流避免频繁写磁盘
+- (void)_submitProxyRequests:(NSArray<NSString *> *)urls {
+    if (!urls.count) return;
+    NSTimeInterval now = CFAbsoluteTimeGetCurrent();
+    // 距上次提交 <0.15s 则合并批处理（滚动 5 瓦片内）
+    NSMutableArray *pending = [NSMutableArray arrayWithArray:urls];
+    _proxyLastRequestAt = now;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        // 合并尚未提交的 key（短时间内多次 updateVisibleTiles 会重复调用）
+        NSMutableArray *merged = [NSMutableArray array];
+        @synchronized (_proxyInFlight) {
+            for (NSString *u in pending) {
+                if ([_proxyInFlight containsObject:u]) continue;
+                [_proxyInFlight addObject:u];
+                [merged addObject:u];
+            }
+        }
+        if (!merged.count) return;
+        NSMutableDictionary *req = [NSMutableDictionary dictionary];
+        req[@"urls"] = merged;
+        req[@"token"] = [[NSUUID UUID] UUIDString];
+        @try {
+            [req writeToFile:@"/var/mobile/Library/Preferences/com.yzdmm.onyx.tilereq.plist" atomically:YES];
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                CFSTR("com.yzdmm.onyx/tilereq"), NULL, NULL, YES);
+        } @catch (NSException *e) {
+            NSLog(@"[OnyxTile] submit proxy request err %@", e);
+        }
+    });
+}
+
+// 注入进程完成下载后：重查共享缓存，能读到的瓦片直接显示
+- (void)handleProxyResult {
+    static NSDate *failAfter; // 距首次等待超过 30s 则放弃代拉，走离线网格兜底
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ failAfter = nil; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!_hasProxyWaitStarted) { _hasProxyWaitStarted = YES; failAfter = [NSDate date]; }
+        // 遍历当前在等待代拉的 inflight key，尝试读共享缓存
+        NSArray *allKeys = [_inflight allObjects];
+        NSMutableArray *remaining = [NSMutableArray array];
+        for (NSString *key in allKeys) {
+            int x, y; NSInteger z;
+            if (sscanf(key.UTF8String, "%ld-%d-%d", &z, &x, &y) != 3) continue;
+            NSString *url = [self tileURLForX:x y:y z:z https:(_srcIndex < 2)];
+            UIImage *img = [self _tileFromSharedCache:url];
+            if (img) {
+                [_imgCache setObject:img forKey:key];
+                [_inflight removeObject:key];
+                @synchronized (_proxyInFlight) { [_proxyInFlight removeObject:url]; }
+                _tileOkCount++;
+                UIImageView *iv = _tileViews[key];
+                if (iv) iv.image = img;
+                if (_offlineMode) [self leaveOfflineMode];
+            } else {
+                [remaining addObject:key];
+            }
+        }
+        BOOL tooLong = failAfter && -[failAfter timeIntervalSinceNow] > 30.0;
+        if (tooLong && remaining.count) {
+            // 代拉彻底失败：回到离线网格底图兜底
+            _hasProxyWaitStarted = NO;
+            failAfter = nil;
+            _reportedFail = NO;
+            [_inflight removeAllObjects];
+            [self handleTileFail];
+            [self updateCoordLabel];
+            if ([self.delegate respondsToSelector:@selector(amapView:didUpdateStatus:)]) {
+                [self.delegate amapView:self didUpdateStatus:@"代拉瓦片失败，已切换离线底图"];
+            }
+            return;
+        }
+        [self updateCoordLabel];
+        // 仍有瓦片没到位，稍后再查
+        if (remaining.count) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [self handleProxyResult];
+            });
+        }
+    });
 }
 
 - (void)handleTileFail {

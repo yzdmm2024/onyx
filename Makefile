@@ -13,10 +13,20 @@ INSTALL_TARGET_PROCESSES = SpringBoard
 include $(THEOS)/makefiles/common.mk
 
 # ===== Tweak 本体（按 app 注入，per-app 控制）=====
+# 注意：瓦片代拉不再由 Tweak 注入 SpringBoard 承担，改由独立 root daemon(OnyxNetDaemon) 唯一负责，
+#      避免双写入者对共享 plist/缓存竞争。
 TWEAK_NAME = Onyx
 Onyx_FILES = src/Tweak.xm
 Onyx_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -w
 Onyx_FRAMEWORKS = UIKit Foundation CoreLocation CoreGraphics
+
+# ===== 网络代拉 Daemon（独立 root launchd 进程，唯一按 tile 下载者）=====
+TOOL_NAME = OnyxNetDaemon
+OnyxNetDaemon_FILES = src/OnyxNetDaemon.m src/OnyxTileProxy.m src/OnyxTileProxy.h
+OnyxNetDaemon_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -w
+OnyxNetDaemon_FRAMEWORKS = Foundation
+OnyxNetDaemon_INSTALL_PATH = /usr/bin
+OnyxNetDaemon_ENTITLEMENTS = daemon/OnyxNetDaemon.entitlements
 
 # ===== 独立配置 App =====
 # 生成 /Applications/OnyxApp.app，桌面打开配置
@@ -29,6 +39,7 @@ OnyxApp_ENTITLEMENTS = App/OnyxApp.entitlements
 OnyxApp_RESOURCE_DIRS = App/Resources
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+include $(THEOS_MAKE_PATH)/tool.mk
 include $(THEOS_MAKE_PATH)/application.mk
 
 after-install::

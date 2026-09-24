@@ -1,0 +1,44 @@
+#!/bin/sh
+# Onyx postinst：注册并启动网络代拉 daemon
+set -e
+
+DAEMON_BIN=/var/jb/usr/bin/OnyxNetDaemon
+PLIST=/var/jb/Library/LaunchDaemons/com.yzdmm.onyx.netdaemon.plist
+
+mkdir -p /var/jb/Library/LaunchDaemons
+
+if [ -x "$DAEMON_BIN" ]; then
+  cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.yzdmm.onyx.netdaemon</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${DAEMON_BIN}</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+PLIST
+  chmod 644 "$PLIST"
+
+  launchctl bootout system "$PLIST" >/dev/null 2>&1 || true
+  launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
+  launchctl kickstart -k system/com.yzdmm.onyx.netdaemon >/dev/null 2>&1 || true
+fi
+
+# 让桌面 App 图标就位
+uicache -p /var/jb/Applications/OnyxApp.app >/dev/null 2>&1 || true
+
+exit 0

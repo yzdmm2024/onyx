@@ -1,0 +1,8 @@
+#!/bin/sh
+# Onyx prerm：停止并移除网络代拉 daemon
+PLIST=/var/jb/Library/LaunchDaemons/com.yzdmm.onyx.netdaemon.plist
+
+launchctl bootout system "$PLIST" >/dev/null 2>&1 || true
+rm -f "$PLIST"
+
+exit 0
