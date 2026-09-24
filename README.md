@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.0.2**
+> 当前版本：**1.0.3**
 
 ---
 
@@ -238,6 +238,7 @@ python publish_onyx.py `
 
 | 版本 | 变更 |
 |---|---|
+| **1.0.3** | 修复「其他 App 一直显示真实定位」：旧版只注入 SpringBoard 走系统级模拟（CLSimulationManager），第三方 App 的 CoreLocation 拿不到假坐标；现改为每个 App 进程内直接 Hook `CLLocationManager`（`location` 取值 / `startUpdatingLocation` / `requestLocation` / `setDelegate` 回调）注入假坐标兜底，覆盖系统模拟下不到的 App |
 | **1.0.2** | 修复 relaxin/RootHide 卸载弹 "Ellekit files are corrupted"：deb 剥离 var/jb/Library 目录条目（CI `ci_strip_dirs.py`，防 dpkg 回收 ellekit 符号链接）、preinst/postinst/postrm 自愈 ellekit 符号链接 + jbctl trustcache 注册、脚本内绝不 killall 系统进程；Tweak 找回 `/var/tmp` 配置读取路径（修复 relaxin 上定位无效果）；Depends 改回 `mobilesubstrate`（ellekit Provides，避免 ellekit 被当依赖联动卸载） |
 | 1.0.1 | 修复 SpringBoard 崩溃（CLSimulationManager API 对齐 LocSim）+ 修复配置 key 大小写 |
 | 1.0.0 | 全新架构：只注入 SpringBoard，系统级全局模拟，极简代码（~110 行），卸载安全 |
