@@ -22,6 +22,7 @@ ci_strip_dirs.py — 从 deb 的 data.tar.xz 里剥离 var/jb/Library 子树的�
 import io
 import lzma
 import sys
+import tarfile
 
 
 def strip_deb(path: str) -> None:
@@ -83,10 +84,39 @@ def strip_deb(path: str) -> None:
 
 
 def tarfile_open_r_xz(body: bytes):
-    import tarfile
     return tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)))
+
+
+def verify_deb(path: str) -> None:
+    """读回 deb，断言 var/jb/Library 子树已无目录条目、文件条目完好。"""
+    import tarfile
+    data = open(path, "rb").read()
+    assert data[:8] == b"!<arch>\n", path
+    off = 8
+    while off < len(data):
+        hdr = data[off:off + 60]
+        name = hdr[0:16].decode("ascii", "replace").strip()
+        size = int(hdr[48:58].decode().strip())
+        body = data[off + 60:off + 60 + size]
+        if name == "data.tar.xz":
+            tf = tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)))
+            members = tf.getmembers()
+            bad = [
+                m.name for m in members
+                if m.isdir() and (
+                    (m.name[2:] if m.name.startswith("./") else m.name)
+                    .startswith("var/jb/Library")
+                )
+            ]
+            assert not bad, f"{path}: DIR entries still present: {bad}"
+            files = [m for m in members if m.isreg()]
+            dylib = [m for m in files if m.name.endswith("Onyx.dylib")]
+            assert dylib, f"{path}: Onyx.dylib missing after strip!"
+            print(f"verified {path}: {len(files)} files, dylib present, no Library DIR entries")
+        off += 60 + size + (size % 2)
 
 
 if __name__ == "__main__":
     for p in sys.argv[1:]:
         strip_deb(p)
+        verify_deb(p)

@@ -61,6 +61,11 @@ jobs:
             W=$(mktemp -d)
             dpkg-deb -x "$DEB" "$W/root"
             dpkg-deb -e "$DEB" "$W/root/DEBIAN"
+            if [ -f preinst ]; then
+              cp preinst "$W/root/DEBIAN/preinst"
+              chmod 0755 "$W/root/DEBIAN/preinst"
+              echo "injected preinst into $DEB"
+            fi
             if [ -f postinst ]; then
               cp postinst "$W/root/DEBIAN/postinst"
               chmod 0755 "$W/root/DEBIAN/postinst"
@@ -117,32 +122,12 @@ jobs:
       - name: Strip DIR entries (protect ellekit DynamicLibraries symlink)
         run: |
           set -e
-          # 必须是最后一个重打包步骤之后执行：
+          # 必须是所有 dpkg-deb -x/-b 重打包步骤之后执行：
           # 剥离 data.tar 里 var/jb/Library 子树的目录条目，防止 dpkg 卸载时
           # 回收空目录连带删掉 ellekit 的 DynamicLibraries 符号链接
           # （relaxin/RootHide 实证 → "Ellekit files are corrupted" 弹窗）。
-          # 注意 chmod 放在脚本内处理；此处 dpkg-deb -b 不会再跑。
+          # 脚本自带回读校验（无 Library 目录条目 + dylib 仍在）。
           python3 ci_strip_dirs.py packages/*.deb
-          echo "--- final verification: no DIR entries under var/jb/Library ---"
-          for DEB in packages/*.deb; do
-            python3 - "$DEB" <<'PYEOF'
-import sys, tarfile, lzma, io
-data = open(sys.argv[1], "rb").read()
-off = 8
-while off < len(data):
-    hdr = data[off:off+60]
-    name = hdr[0:16].decode().strip()
-    size = int(hdr[48:58].decode().strip())
-    body = data[off+60:off+60+size]
-    if name == "data.tar.xz":
-        tf = tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)))
-        bad = [m.name for m in tf.getmembers() if m.isdir() and (m.name == "./var/jb/Library" or m.name.startswith("./var/jb/Library/"))]
-        assert not bad, f"DIR entries still present: {bad}"
-        files = [m.name for m in tf.getmembers() if m.isreg()]
-        print(f"{sys.argv[1]}: {len(files)} files, no Library DIR entries")
-    off += 60 + size + (size % 2)
-PYEOF
-          done
 
       - name: Upload deb artifacts
         uses: actions/upload-artifact@v4
