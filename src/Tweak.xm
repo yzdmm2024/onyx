@@ -151,12 +151,18 @@ static NSString *OnyxStack(void) {
     }
     return [out componentsJoinedByString:@" <- "];
 }
+static NSString *OnyxTimestamp(void) {
+    time_t t = time(NULL);
+    struct tm tmv; localtime_r(&t, &tmv);
+    return [NSString stringWithFormat:@"%02d:%02d:%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec];
+}
 static void OLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
-    NSString *line = [NSString stringWithFormat:@"[Onyx %@] %@\n",
-                      [[NSProcessInfo processInfo] processName], msg];
+    // v1.4.1：每行带时间戳，否则多条线索之间没法对时间
+    NSString *line = [NSString stringWithFormat:@"[Onyx %@ %@] %@\n",
+                      [[NSProcessInfo processInfo] processName], OnyxTimestamp(), msg];
     OWrite(line);
 }
 static void OLogStack(NSString *tag) {
@@ -164,6 +170,7 @@ static void OLogStack(NSString *tag) {
 }
 
 // 读配置：/var/tmp 公共路径优先（relaxin 上 App 唯一写得动），多路径回退
+static NSString *s_lastHitPath = nil;  // v1.4.1：路径没变就不再刷 plist hit（轮询每 3s 一次，刷屏会把 ECHO 判定冲掉）
 static NSDictionary *_onyxLoadPlist(void) {
     NSArray<NSString *> *cands = @[
         @"/var/tmp/com.yzdmm.onyx.plist",
@@ -175,14 +182,19 @@ static NSDictionary *_onyxLoadPlist(void) {
     for (NSString *p in cands) {
         NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
         if (d) {
-            OLog(@"plist hit: %@", p);
+            if (!s_lastHitPath || ![s_lastHitPath isEqualToString:p]) {
+                s_lastHitPath = p;
+                OLog(@"plist hit: %@", p);
+            }
             return d;
         }
     }
+    s_lastHitPath = nil;
     OLog(@"plist MISS: no candidate file readable");
     return nil;
 }
 
+static NSDictionary *s_lastLoggedPrefs = nil;  // v1.4.1：内容没变不重复打 prefs 行
 static void _readPrefs(void) {
     NSDictionary *d = _onyxLoadPlist();
     if (!d) {
@@ -197,6 +209,8 @@ static void _readPrefs(void) {
     NSArray *ex = d[@"ExcludedApps"];
     s_excluded = [ex isKindOfClass:[NSArray class]] ? [NSSet setWithArray:ex] : nil;
     s_lastRead = CFAbsoluteTimeGetCurrent();
+    if (s_lastLoggedPrefs && [d isEqualToDictionary:s_lastLoggedPrefs]) return;
+    s_lastLoggedPrefs = d;
     OLog(@"prefs: enabled=%d hasCoord=%d lat=%.6f lng=%.6f excluded=%@",
          (int)s_enabled, (int)s_hasCoord, s_lat, s_lng,
          s_excluded ? s_excluded.allObjects : @[]);
@@ -350,7 +364,11 @@ static void _applySimulation(void);
 static void OnyxEchoTest(void) {
     if (!s_isSpringBoard || s_echoBusy) return;
     if (!s_enabled || !s_hasCoord) return;
-    if (s_echoLastAt > 0 && CFAbsoluteTimeGetCurrent() - s_echoLastAt < 90.0) return;
+    // v1.4.1：被限流跳过也要留痕，否则日志里"没有 ECHO"分不清是没触发还是被限流
+    if (s_echoLastAt > 0 && CFAbsoluteTimeGetCurrent() - s_echoLastAt < 90.0) {
+        OLog(@"ECHO: skip (rate-limit, 距上次判定 %.0fs)", 90.0 - (CFAbsoluteTimeGetCurrent() - s_echoLastAt));
+        return;
+    }
     s_echoBusy = YES;
 
     s_echoMgr = [[CLLocationManager alloc] init];
@@ -747,7 +765,7 @@ static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void
             imgPath = [found componentsJoinedByString:@","];
             if (!imgPath.length) imgPath = @"(not in dyld image list)";
             OWrite([NSString stringWithFormat:
-                   @"=== Onyx v1.4.0 BOOT pid=%d proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
+                   @"=== Onyx v1.4.1 BOOT pid=%d proc=%@ bundle=%@ plist=%@ enabled=%d hasCoord=%d lat=%.6f lng=%.6f simNow=%d img=%@ ===\n",
                    (int)getpid(),
                    procName, bid, (s_enabled ? @"hit" : @"?"), (int)s_enabled, (int)s_hasCoord,
                    s_lat, s_lng, (int)s_simulating, imgPath]);

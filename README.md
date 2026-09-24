@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.4.0**
+> 当前版本：**1.4.1**
 
 ---
 
@@ -58,6 +58,18 @@ v1.3.0 做法：
 > 已知取舍：系统级模拟对**所有** App 生效，黑名单在模拟模式下无法给单个 App 还原真实位置
 > （模拟器本身没有"只给某 App 放行"的开关）。要个别 App 保持真实，请改用需要注入思路的旧版本。
 
+### v1.4.1：日志系统自证失效——刷屏把判定冲掉了
+
+v1.4.0 真机日志显示：SpringBoard 链路全通（`sim: START`、心跳 `HB #8 simulating=1`），
+但看不到任何 `ECHO:` 判定行。原因不在回声本身，而在日志系统：
+
+1. **刷屏**：轮询每 3 秒打 `plist hit` + `prefs:` 两行，一天 5 万多行，512KB 日志几小时截断，
+   最早那条 `ECHO:` 判定被冲掉；
+2. **静默限流**：回声 90 秒内重试直接 return，日志里"没有 ECHO"分不清是没触发还是被限流；
+3. **没时间戳**：多条线索之间没法对时间。
+
+v1.4.1：每行日志带 `HH:mm:ss` 时间戳；配置没变化不再重复打日志；限流跳过时写 `ECHO: skip (rate-limit)`。
+
 ### v1.4.0：从"模拟启动了"到"模拟真的在投递"
 
 v1.3.0 的日志已经证明 SpringBoard 侧链路是通的（plist 读到了、`sim: created`、
@@ -85,7 +97,7 @@ v1.4.0 因此加了一个**端到端回声自检**：模拟启动 3 秒后，Spr
 - 日志路径：**`/var/tmp/onyx_debug.log`**（写不进去自动 fallback 到 `/tmp/onyx_debug.log`）
 - 打开 Onyx App → 主界面底部「**诊断日志**」按钮 → v1.4.0 会**自动合并三个路径**的内容，截图/复制发来即可
 - 每次进程加载都会**强制写一行 BOOT**，格式：
-  `=== Onyx v1.4.0 BOOT pid=<pid> proc=<进程名> bundle=<bundle id> ... img=<dylib 镜像路径> ===`
+  `=== Onyx v1.4.1 BOOT pid=<pid> proc=<进程名> bundle=<bundle id> ... img=<dylib 镜像路径> ===`
   - **关键**：`proc=SpringBoard` = 只有系统进程加载了它（预期，主力在这）；
     **出现 `proc=ColorfulClouds` 之类的行 = 该 App 进程确实注入成功了**。
   - `img=(not in dyld image list)` → dylib 被加载过但不在镜像表里，`plist=MISS` 通常是同一类问题（路径在 App 命名空间里不可见）。
