@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 1.0.3
+Version: 1.1.0
 Section: Tweaks
 Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v1.0.3 修复「其他 App 一直显示真实定位」：旧版只注入 SpringBoard 走系统级模拟(CLSimulationManager)，第三方 App 的 CoreLocation 拿不到假坐标；现改为每个 App 进程内直接 Hook CLLocationManager(location 取值/startUpdatingLocation/requestLocation/setDelegate 回调)注入假坐标兜底，覆盖系统模拟下不到的 App。v1.0.2 修复 relaxin 卸载弹 Ellekit corrupted + 找回 /var/tmp 配置路径。支持 iOS 15-17，rootless 适配，A12+。
+Description: 想去哪里就去哪里。v1.1.0 彻底修复「第三方 App 一直显示真实定位」：回到 v0.7 验证可用的 per-app 直注方案——直接 Hook CLLocation 类本体(coordinate/init/locationWithLatitude) + CLLocationManager + 百度/高德/腾讯三家地图 SDK，任何 App 读到/构造的坐标都被洗成假坐标；SpringBoard 保留 CLSimulationManager 系统级模拟作兜底。新增黑名单：App 内「黑名单（排除应用）」可把不需要改定位的 App 加进去，这些 App 保持真实位置。v1.0.2 修复 relaxin 卸载弹 Ellekit corrupted + 找回 /var/tmp 配置路径。支持 iOS 15-17，rootless 适配，A12+。

@@ -310,6 +310,10 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
 
     self.historyButton = [self buttonWithTitle:@"历史记录" color:[UIColor systemGrayColor] action:@selector(openHistory:)];
     [stack addArrangedSubview:self.historyButton];
+
+    // 黑名单：点开后可把「不需要改定位」的 App 加进去（这些 App 保持真实位置）
+    UIButton *blacklistButton = [self buttonWithTitle:@"黑名单（排除应用）" color:[UIColor systemPurpleColor] action:@selector(openAppsList:)];
+    [stack addArrangedSubview:blacklistButton];
 }
 
 - (UILabel *)label:(NSString *)title value:(NSString *)value {
@@ -426,7 +430,7 @@ static NSString *const kRecentCoordsKey = @"com.yzdmm.onyx.recentCoords";
     [self saveState];
     [self notifyTweak];
     [self updateStatus];
-    NSString *msg = @"已启用模拟。系统全局生效，所有 App 都会使用所选位置。";
+    NSString *msg = @"已启用模拟。除「黑名单」里排除的 App 外，其余 App 都会使用所选位置（点底部「黑名单」可管理）。";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存并应用" message:msg preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];

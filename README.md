@@ -2,7 +2,7 @@
 
 > 包名 `com.yzdmm.onyx` ｜ 显示名 `GO~` ｜ 越狱源 https://yzdmm2024.github.io/repo/
 > 适配：iOS 15–17，rootless（arm64 无根 Dopamine/palera1n + arm64e 隐根 Relaxin/RootHide），A12+
-> 当前版本：**1.0.3**
+> 当前版本：**1.1.0**
 
 ---
 
@@ -12,20 +12,21 @@
 
 两个核心能力：
 
-1. **定位模拟** — 通过私有 API `CLSimulationManager` 做**系统级全局模拟**，所有 App 自动生效。
+1. **定位模拟** — 每个 App 进程内**直接 Hook `CoreLocation`**（坐标对象本体 + `CLLocationManager` + 百度/高德/腾讯三家地图 SDK）注入假坐标，保证所有 App 都读到假坐标；SpringBoard 内另跑 `CLSimulationManager` 系统级模拟作兜底。
 2. **地图选点** — 自带 App 内嵌自绘瓦片地图，可搜索 / 拖动 / 缩放选点；瓦片由 SpringBoard 进程代拉。
 
-### 为什么钉钉检测不到
+### 关于反作弊检测（重要）
 
-| 检测维度 | 本插件做法 |
+| 检测维度 | v1.1.0 做法 |
 |---|---|
-| 注入范围 | **只注入 SpringBoard**（`com.apple.springboard`），钉钉进程里没有任何 dylib |
-| 模拟方式 | `CLSimulationManager` 是 iOS 原生机制，App 侧无法查询/感知 |
+| 注入范围 | **注入所有 App 进程**（per-app hook 才能让第三方 App 生效），钉钉等进程里会有 Onyx dylib |
+| 模拟方式 | Hook `CoreLocation` / 地图 SDK，App 读到的坐标即被替换 |
 | App 名称 | 显示名 `GO~`，图标为紫色渐变"GO"字样，不像定位工具 |
 
-> 关键结论：**只要不往目标 App（钉钉）进程里注入任何东西，反作弊就扫不到。**
-> 之前 v0.5.x–v0.7.x 走的是 per-app hook 路线（WildCard 注入所有 UIKit App），
-> 钉钉扫自己进程的 dylib 列表就直接报"使用虚拟打卡"。
+> ⚠️ **v1.1.0 为让第三方 App 一定生效，改回了 per-app hook（dylib 注入所有 App）。**
+> 这意味着钉钉这类反作弊 App **能扫到自己进程里的 Onyx dylib**，可能报"使用虚拟定位"。
+> 若你需要避开钉钉检测，请把它加入**黑名单**（黑名单里保持真实定位），或直接只用系统级模拟（后续可加进程白名单过滤）。
+> 之前 v0.5.x–v0.7.x 走 per-app hook 也被钉钉扫到；v1.0.x 改成只注入 SpringBoard 虽然检测不到，但第三方 App 拿不到假坐标（就是本次要修的问题）。**两难取其一：要覆盖所有 App，就接受可被检测。**
 
 ---
 
@@ -238,7 +239,7 @@ python publish_onyx.py `
 
 | 版本 | 变更 |
 |---|---|
-| **1.0.3** | 修复「其他 App 一直显示真实定位」：旧版只注入 SpringBoard 走系统级模拟（CLSimulationManager），第三方 App 的 CoreLocation 拿不到假坐标；现改为每个 App 进程内直接 Hook `CLLocationManager`（`location` 取值 / `startUpdatingLocation` / `requestLocation` / `setDelegate` 回调）注入假坐标兜底，覆盖系统模拟下不到的 App |
+| **1.1.0** | **彻底修复「第三方 App 一直显示真实定位」**：回到 v0.7 验证可用的 per-app 直注方案——直接 Hook `CLLocation` 类本体（`coordinate` / `initWithLatitude:longitude:` / `locationWithLatitude:longitude:`）+ `CLLocationManager` + 百度/高德/腾讯三家地图 SDK，任何 App 读到/构造的坐标都被洗成假坐标；SpringBoard 保留 `CLSimulationManager` 系统级模拟作兜底。**新增黑名单**：App 内「黑名单（排除应用）」可把不需要改定位的 App 加进去，这些 App 保持真实位置。注意：此版为让第三方 App 生效改为 per-app hook，dylib 会注入所有 App（含钉钉），反作弊可能检测到注入——若需避开某 App 检测，后续可加进程过滤 |
 | **1.0.2** | 修复 relaxin/RootHide 卸载弹 "Ellekit files are corrupted"：deb 剥离 var/jb/Library 目录条目（CI `ci_strip_dirs.py`，防 dpkg 回收 ellekit 符号链接）、preinst/postinst/postrm 自愈 ellekit 符号链接 + jbctl trustcache 注册、脚本内绝不 killall 系统进程；Tweak 找回 `/var/tmp` 配置读取路径（修复 relaxin 上定位无效果）；Depends 改回 `mobilesubstrate`（ellekit Provides，避免 ellekit 被当依赖联动卸载） |
 | 1.0.1 | 修复 SpringBoard 崩溃（CLSimulationManager API 对齐 LocSim）+ 修复配置 key 大小写 |
 | 1.0.0 | 全新架构：只注入 SpringBoard，系统级全局模拟，极简代码（~110 行），卸载安全 |

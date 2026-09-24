@@ -1,241 +1,367 @@
-// Onyx Tweak
-// 定位模拟：双管齐下
-//   1) SpringBoard 内 CLSimulationManager 系统级模拟（跟 LocSim 同款，隐身，能下发的 App 走这条）
-//   2) 各 App 进程内 Hook CoreLocation，直接注入假坐标（兜底，覆盖系统模拟未生效的第三方 App）
-// 瓦片代拉：SpringBoard 进程内启动（platformized 可联网）
+// Onyx Tweak v1.1.0
 //
-// v1.0.3：修复「其他 App 一直显示真实定位」——旧版只在 SpringBoard 跑系统模拟，
-//         第三方 App 的 CoreLocation 管线拿不到假坐标。现在每个 App 进程内直接
-//         Hook CLLocationManager（location 取值 / startUpdatingLocation / requestLocation /
-//         setDelegate 回调），保证所有 App 都读到假坐标。
+// 定位模拟（per-app 直注，v0.7.1 验证可用）：
+//   - hook CLLocation 类本体（coordinate / initWithLatitude:longitude: / locationWithLatitude:longitude:）
+//     → 任何 App 读到 / 构造的 CLLocation 都拿到假坐标（覆盖 direct-read 场景）
+//   - hook CLLocationManager（location 取值 / setDelegate / startUpdatingLocation / requestLocation …）
+//   - hook 三家地图 SDK（百度 BMK / 高德 AMap / 腾讯 Tencent）→ 覆盖走 SDK 的 App
+// 黑名单 ExcludedApps：用户在 App 里自行添加「不需要改定位」的 App（保持真实位置）。
+// SpringBoard：仅跑瓦片代拉 + 可选 CLSimulationManager 系统级模拟（兜底，能下发的 App 自动生效）。
+//
+// 配置：直接读 /var/tmp/com.yzdmm.onyx.plist（relaxin 可写），多路径回退；
+//       收到 Darwin 通知 com.yzdmm.onyx/changed 立即重读并推坐标。
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import "OnyxTileProxy.h"
 
-// CLSimulationManager 私有 API（跟 LocSim 同款）
-@interface CLSimulationManager : NSObject
-- (void)appendSimulatedLocation:(CLLocation *)location;
-- (void)startLocationSimulation;
-- (void)stopLocationSimulation;
+// ---- 第三方定位 SDK 的最小桩声明（仅编译期需要，运行期 Hook 真实类） ----
+@interface BMKLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
 @end
+@interface AMapLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
+@end
+@interface TencentLocationManager : NSObject
+@property (nonatomic, weak) id delegate;
+@end
+
+@protocol BMKLocationManagerDelegate <NSObject>
+- (void)didUpdateLocation:(CLLocation *)location;
+@end
+@protocol AMapLocationManagerDelegate <NSObject>
+- (void)amapLocationManager:(id)manager didUpdateLocation:(CLLocation *)location reGeocode:(id)reGeocode;
+@end
+@protocol TencentLocationManagerDelegate <NSObject>
+- (void)locationManager:(id)manager didUpdateLocation:(CLLocation *)location;
+@end
+
+static NSString *const kDomain  = @"com.yzdmm.onyx";
+#define kChanged CFSTR("com.yzdmm.onyx/changed")
+#define kStop    CFSTR("com.yzdmm.onyx/stop")
 
 static double s_lat = 0, s_lng = 0;
 static BOOL s_enabled = NO;
 static BOOL s_hasCoord = NO;
-static BOOL s_simulating = NO;
 static BOOL s_isSpringBoard = NO;
-static CLSimulationManager *s_simMgr = nil;
+static NSSet<NSString *> *s_excluded = nil;
+static NSHashTable<CLLocationManager *> *s_mgrs = nil;
+static CFAbsoluteTime s_lastRead = 0;
 
-// 读配置：Tweak 同目录优先（dylib 能加载就能读），再回退公共路径与 Preferences
-// ⚠️ relaxin/RootHide 上 OnyxApp 唯一写得动的是 /var/tmp（v1.0.2 找回）。
-static NSDictionary *_loadPrefs(void) {
-    NSArray *paths = @[
+// 读配置：/var/tmp 公共路径优先（relaxin 上 App 唯一写得动），多路径回退
+static NSDictionary *_onyxLoadPlist(void) {
+    NSArray<NSString *> *cands = @[
+        @"/var/tmp/com.yzdmm.onyx.plist",
         @"/var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
         @"/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
-        @"/var/tmp/com.yzdmm.onyx.plist",
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
     ];
-    for (NSString *p in paths) {
+    for (NSString *p in cands) {
         NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
         if (d) return d;
     }
     return nil;
 }
 
-// 生成带合理精度的假坐标（horizontalAccuracy=5m，避免被 App 因无效精度丢弃）
+static void _readPrefs(void) {
+    NSDictionary *d = _onyxLoadPlist();
+    if (!d) {
+        s_enabled = NO; s_hasCoord = NO; s_excluded = nil;
+        s_lastRead = CFAbsoluteTimeGetCurrent();
+        return;
+    }
+    s_enabled = [d[@"enabled"] boolValue];
+    NSNumber *la = d[@"Latitude"], *ln = d[@"Longitude"];
+    s_hasCoord = (la && ln && fabs([la doubleValue]) > 0.0001);
+    if (s_hasCoord) { s_lat = [la doubleValue]; s_lng = [ln doubleValue]; }
+    NSArray *ex = d[@"ExcludedApps"];
+    s_excluded = [ex isKindOfClass:[NSArray class]] ? [NSSet setWithArray:ex] : nil;
+    s_lastRead = CFAbsoluteTimeGetCurrent();
+}
+
+static void _readPrefsThrottled(void) {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - s_lastRead > 1.0) _readPrefs();
+}
+
+// 当前进程是否应启用假坐标：黑名单（ExcludedApps）内的 App 用真实位置
+static BOOL _active(void) {
+    _readPrefsThrottled();
+    if (!s_enabled || !s_hasCoord) return NO;
+    if (s_isSpringBoard) return NO;
+    NSString *bid = NSBundle.mainBundle.bundleIdentifier;
+    if (!bid) bid = [[NSProcessInfo processInfo] processName];
+    if (s_excluded && [s_excluded containsObject:bid]) return NO;
+    return YES;
+}
+
+static CLLocationCoordinate2D _fakeCoord(void) {
+    return CLLocationCoordinate2DMake(s_lat, s_lng);
+}
+// 带合理精度（horizontalAccuracy=5m）的假坐标，避免被 App 因无效精度丢弃
 static CLLocation *_fakeLocation(void) {
-    CLLocationCoordinate2D c = CLLocationCoordinate2DMake(s_lat, s_lng);
-    return [[CLLocation alloc] initWithCoordinate:c
-                                         altitude:0
-                               horizontalAccuracy:5
-                                 verticalAccuracy:-1
-                                           course:-1
-                                            speed:-1
-                                        timestamp:[NSDate date]];
-}
-
-// 启动系统级模拟（仅 SpringBoard）
-static void _startSimulation(void) {
-    if (s_simulating) return;
-    Class simClass = objc_getClass("CLSimulationManager");
-    if (!simClass) { NSLog(@"[Onyx] CLSimulationManager not found"); return; }
-    s_simMgr = [[simClass alloc] init];
-    if (!s_simMgr) { NSLog(@"[Onyx] init CLSimulationManager failed"); return; }
-    [s_simMgr appendSimulatedLocation:_fakeLocation()];
-    [s_simMgr startLocationSimulation];
-    s_simulating = YES;
-    NSLog(@"[Onyx] sim started %.5f, %.5f", s_lat, s_lng);
-}
-
-// 停止系统级模拟（仅 SpringBoard）
-static void _stopSimulation(void) {
-    if (!s_simulating) return;
-    [s_simMgr stopLocationSimulation];
-    s_simMgr = nil;
-    s_simulating = NO;
-    NSLog(@"[Onyx] sim stopped");
-}
-
-// 应用配置：所有进程都会调用（读 plist），但系统级模拟只由 SpringBoard 驱动
-static void _applyPrefs(void) {
-    NSDictionary *prefs = _loadPrefs();
-    if (!prefs) { NSLog(@"[Onyx] no prefs found"); return; }
-
-    NSNumber *en = prefs[@"enabled"];
-    NSNumber *lat = prefs[@"Latitude"];
-    NSNumber *lng = prefs[@"Longitude"];
-
-    s_enabled = en.boolValue;
-    s_lat = lat.doubleValue;
-    s_lng = lng.doubleValue;
-    s_hasCoord = (lat != nil && lng != nil && fabs(s_lat) > 0.0001);
-
-    if (s_isSpringBoard) {
-        if (s_enabled && s_hasCoord) {
-            if (s_simulating) _stopSimulation();
-            _startSimulation();
-        } else if (s_simulating) {
-            _stopSimulation();
-        }
-    }
-    NSLog(@"[Onyx] applyPrefs enabled=%d hasCoord=%d", s_enabled, s_hasCoord);
-}
-
-#pragma mark - App 级 CoreLocation Hook 辅助
-
-static NSMutableDictionary *s_origMap = nil;   // key:"ClassName_selname" -> NSNumber(IMP)
-static NSLock *s_mapLock = nil;
-
-static NSString *_onyxKey(Class cls, SEL sel) {
-    return [NSString stringWithFormat:@"%s_%s", class_getName(cls), sel_getName(sel)];
-}
-static IMP _onyxOrig(Class cls, SEL sel) {
-    NSString *k = _onyxKey(cls, sel);
-    NSNumber *v;
-    [s_mapLock lock]; v = [s_origMap objectForKey:k]; [s_mapLock unlock];
-    return (IMP)[v unsignedLongLongValue];
-}
-// 把 delegate 的某个回调方法换成我们的版本（每个类只换一次）
-static void _onyxSwizzle(Class cls, SEL sel, IMP newImp) {
-    if (!class_respondsToSelector(cls, sel)) return;
-    NSString *k = _onyxKey(cls, sel);
-    [s_mapLock lock];
-    if (![s_origMap objectForKey:k]) {
-        Method m = class_getInstanceMethod(cls, sel);
-        IMP orig = method_getImplementation(m);
-        method_setImplementation(m, newImp);
-        [s_origMap setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)orig] forKey:k];
-    }
-    [s_mapLock unlock];
-}
-
-// 替换后的 delegate 回调：把真实坐标洗成假坐标
-static void _onyxDidUpdateLocations(id self, SEL _cmd, CLLocationManager *mgr, NSArray *locations) {
-    IMP orig = _onyxOrig(object_getClass(self), _cmd);
-    if (s_enabled && s_hasCoord) {
-        locations = @[_fakeLocation()];
-    }
-    if (orig) ((void(*)(id, SEL, id, NSArray *))orig)(self, _cmd, mgr, locations);
-}
-// 兼容老的 -locationManager:didUpdateToLocation:fromLocation:（iOS 6 以前）
-static void _onyxDidUpdateToLocation(id self, SEL _cmd, CLLocationManager *mgr,
-                                     CLLocation *newLoc, CLLocation *oldLoc) {
-    IMP orig = _onyxOrig(object_getClass(self), _cmd);
-    if (s_enabled && s_hasCoord) {
-        newLoc = _fakeLocation();
-        oldLoc = _fakeLocation();
-    }
-    if (orig) ((void(*)(id, SEL, id, id, id))orig)(self, _cmd, mgr, newLoc, oldLoc);
+    return [[CLLocation alloc] initWithCoordinate:_fakeCoord()
+                                        altitude:0
+                              horizontalAccuracy:5
+                                verticalAccuracy:-1
+                                          course:-1
+                                           speed:-1
+                                      timestamp:[NSDate date]];
 }
 
 // 主动向 delegate 推一帧假坐标
-static void _pushFakeToDelegate(CLLocationManager *mgr) {
-    if (!s_enabled || !s_hasCoord) return;
+static void _pushToDelegate(CLLocationManager *mgr) {
+    if (!_active()) return;
     id del = mgr.delegate;
     if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
         [del locationManager:mgr didUpdateLocations:@[_fakeLocation()]];
     }
 }
 
-%hook CLLocationManager
+#pragma mark - SpringBoard 系统级模拟（兜底）
 
-// 直接读 .location 属性的 App 走这条
-- (CLLocation *)location {
-    if (!s_isSpringBoard && s_enabled && s_hasCoord) {
-        return _fakeLocation();
+@interface CLSimulationManager : NSObject
+- (void)appendSimulatedLocation:(CLLocation *)location;
+- (void)startLocationSimulation;
+- (void)stopLocationSimulation;
+@end
+static CLSimulationManager *s_simMgr = nil;
+static BOOL s_simulating = NO;
+
+static void _applySimulation(void) {
+    if (!s_isSpringBoard) return;
+    if (s_enabled && s_hasCoord) {
+        if (!s_simMgr) {
+            Class c = NSClassFromString(@"CLSimulationManager");
+            if (!c) { NSLog(@"[Onyx] CLSimulationManager not found"); return; }
+            s_simMgr = [[c alloc] init];
+        }
+        if (!s_simMgr) return;
+        [s_simMgr appendSimulatedLocation:_fakeLocation()];
+        if (!s_simulating) { [s_simMgr startLocationSimulation]; s_simulating = YES; }
+        NSLog(@"[Onyx] sim started -> %.6f,%.6f", s_lat, s_lng);
+    } else if (s_simulating) {
+        [s_simMgr stopLocationSimulation]; s_simulating = NO; s_simMgr = nil;
+        NSLog(@"[Onyx] sim stopped");
     }
-    return %orig;
 }
-
-// 开始更新 / 单次请求 / 显著位置变化：先放行，再补推一帧假坐标
-- (void)startUpdatingLocation {
-    %orig;
-    if (!s_isSpringBoard) _pushFakeToDelegate(self);
-}
-- (void)requestLocation {
-    %orig;
-    if (!s_isSpringBoard) _pushFakeToDelegate(self);
-}
-- (void)startMonitoringSignificantLocationChanges {
-    %orig;
-    if (!s_isSpringBoard) _pushFakeToDelegate(self);
-}
-
-// 接管 delegate 回调：真实坐标一律洗成假坐标（覆盖系统模拟下不到的 App）
-- (void)setDelegate:(id)delegate {
-    if (delegate && !s_isSpringBoard) {
-        _onyxSwizzle(object_getClass(delegate),
-                     @selector(locationManager:didUpdateLocations:),
-                     (IMP)_onyxDidUpdateLocations);
-        _onyxSwizzle(object_getClass(delegate),
-                     @selector(locationManager:didUpdateToLocation:fromLocation:),
-                     (IMP)_onyxDidUpdateToLocation);
-    }
-    %orig;
-}
-
-%end
 
 #pragma mark - 通知回调
 
-static void _prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name,
-                          const void *object, CFDictionaryRef userInfo) {
-    _applyPrefs();
+static void onChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
+    _readPrefs();
+    _applySimulation();
+    if (_active()) {
+        for (CLLocationManager *m in s_mgrs) {
+            if (m && [m respondsToSelector:@selector(_onyxFakePush)]) {
+                [m performSelector:@selector(_onyxFakePush)];
+            }
+        }
+    }
+    NSLog(@"[Onyx] changed: enabled=%d hasCoord=%d excluded=%@", s_enabled, s_hasCoord, s_excluded.allObjects);
 }
-static void _stopSimCallback(CFNotificationCenterRef center, void *observer, CFStringRef name,
-                             const void *object, CFDictionaryRef userInfo) {
-    _stopSimulation();
-    s_enabled = NO;
-    s_hasCoord = NO;
+static void onStop(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
+    s_enabled = NO; s_hasCoord = NO;
+    _applySimulation();
+    NSLog(@"[Onyx] stopped");
 }
+
+#pragma mark - Hooks
+
+%group OnyxHooks
+
+// —— 最关键：hook CLLocation 类本体，任何坐标对象都被洗成假坐标 ——
+%hook CLLocation
+- (CLLocationCoordinate2D)coordinate {
+    if (_active()) return _fakeCoord();
+    return %orig;
+}
+- (id)initWithLatitude:(double)lat longitude:(double)lng {
+    if (_active()) return %orig(s_lat, s_lng);
+    return %orig;
+}
++ (id)locationWithLatitude:(double)lat longitude:(double)lng {
+    if (_active()) return %orig(s_lat, s_lng);
+    return %orig;
+}
+%end
+
+%hook CLLocationManager
+- (instancetype)init {
+    CLLocationManager *m = %orig;
+    if (m && s_mgrs) [s_mgrs addObject:m];
+    return m;
+}
+- (void)dealloc {
+    if (s_mgrs) [s_mgrs removeObject:self];
+    %orig;
+}
+- (CLLocation *)location {
+    if (_active()) return _fakeLocation();
+    return %orig;
+}
+- (void)setDelegate:(id)delegate {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self performSelector:@selector(_onyxFakePush)];
+        });
+    }
+}
+- (void)requestLocation {
+    if (_active()) { _pushToDelegate(self); return; }
+    %orig;
+}
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self performSelector:@selector(_onyxFakePush)]; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self performSelector:@selector(_onyxFakePush)]; });
+    }
+}
+- (void)startMonitoringSignificantLocationChanges {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self performSelector:@selector(_onyxFakePush)]; });
+    }
+}
+- (void)requestWhenInUseAuthorization {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self performSelector:@selector(_onyxFakePush)]; });
+    }
+}
+- (void)requestAlwaysAuthorization {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self performSelector:@selector(_onyxFakePush)]; });
+    }
+}
+%new
+- (void)_onyxFakePush {
+    if (!_active()) return;
+    _pushToDelegate(self);
+}
+%end
+
+%end // OnyxHooks
+
+// 百度定位 SDK
+%group BaiduHooks
+%hook BMKLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(didUpdateLocation:)]) {
+                    [del didUpdateLocation:_fakeLocation()];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithReGeocode:(BOOL)reGeocode completionBlock:(id)block {
+    if (_active()) {
+        CLLocation *loc = _fakeLocation();
+        if (block) { void (^cb)(CLLocation *l, id error, BOOL regeo) = (id)block; cb(loc, nil, reGeocode); }
+        return;
+    }
+    %orig;
+}
+%end
+%hook BMKLocation
+- (CLLocationCoordinate2D)coordinate { if (_active()) return _fakeCoord(); return %orig; }
+- (CLLocation *)location { if (_active()) return _fakeLocation(); return %orig; }
+%end
+%end
+
+// 高德定位 SDK
+%group AMapHooks
+%hook AMapLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(amapLocationManager:didUpdateLocation:reGeocode:)]) {
+                    [del amapLocationManager:self didUpdateLocation:_fakeLocation() reGeocode:nil];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithReGeocode:(BOOL)reGeocode completionBlock:(id)block {
+    if (_active()) {
+        CLLocation *loc = _fakeLocation();
+        if (block) { void (^cb)(CLLocation *l, id regeo, id error) = (id)block; cb(loc, nil, nil); }
+        return;
+    }
+    %orig;
+}
+%end
+%hook AMapLocation
+- (CLLocationCoordinate2D)coordinate { if (_active()) return _fakeCoord(); return %orig; }
+%end
+%end
+
+// 腾讯定位 SDK
+%group TencentHooks
+%hook TencentLocationManager
+- (void)startUpdatingLocation {
+    %orig;
+    if (_active()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self respondsToSelector:@selector(delegate)]) {
+                id del = self.delegate;
+                if (del && [del respondsToSelector:@selector(locationManager:didUpdateLocation:)]) {
+                    [del locationManager:self didUpdateLocation:_fakeLocation()];
+                }
+            }
+        });
+    }
+}
+- (void)requestLocationWithCompletionBlock:(id)block {
+    if (_active()) {
+        CLLocation *loc = _fakeLocation();
+        if (block) { void (^cb)(CLLocation *l, id error) = (id)block; cb(loc, nil); }
+        return;
+    }
+    %orig;
+}
+%end
+%end
 
 %ctor {
     @autoreleasepool {
-        s_origMap = [NSMutableDictionary dictionary];
-        s_mapLock = [[NSLock alloc] init];
-
         NSString *procName = [[NSProcessInfo processInfo] processName];
         s_isSpringBoard = [procName isEqualToString:@"SpringBoard"];
 
-        // 每个进程都读一次配置，保证 App 进程知道要不要注入假坐标
-        _applyPrefs();
+        s_mgrs = [NSHashTable weakObjectsHashTable];
+        _readPrefs();
 
-        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-            NULL, _prefsChanged, CFSTR("com.yzdmm.onyx/changed"), NULL,
-            CFNotificationSuspensionBehaviorDeliverImmediately);
-        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-            NULL, _stopSimCallback, CFSTR("com.yzdmm.onyx/stop"), NULL,
-            CFNotificationSuspensionBehaviorDeliverImmediately);
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+            onChanged, kChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+            onStop, kStop, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
         if (s_isSpringBoard) {
-            // 瓦片代拉：SpringBoard 可联网，代 OnyxApp 下载地图瓦片
+            // SpringBoard 只跑瓦片代拉 + 系统级模拟兜底，不做任何 App 内定位 hook
             [[OnyxTileProxy shared] startObserving];
-            NSLog(@"[Onyx] loaded in SpringBoard, simulating=%d", s_simulating);
+            _applySimulation();
+            NSLog(@"[Onyx] loaded (SpringBoard) simulating=%d", s_simulating);
         } else {
-            NSLog(@"[Onyx] loaded in %@, enabled=%d hasCoord=%d", procName, s_enabled, s_hasCoord);
+            %init(OnyxHooks);
+            %init(BaiduHooks);
+            %init(AMapHooks);
+            %init(TencentHooks);
+            NSLog(@"[Onyx] loaded (app=%@) enabled=%d hasCoord=%d active=%d excluded=%@",
+                  procName, s_enabled, s_hasCoord, _active(), s_excluded.allObjects);
         }
     }
 }
