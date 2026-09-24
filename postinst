@@ -1,11 +1,47 @@
 #!/bin/sh
+# Onyx postinst — 图标刷新 + ellekit 符号链接自愈 + RootHide trustcache 注册
+#
+# ⚠️ 铁律（relaxin/RootHide 设备实证，参照 VCamPlus 事故复盘）：
+#   1. 绝不在 dpkg 事务内 killall 任何系统进程 / respring ——
+#      Sileo/apt 收尾被打断 → dpkg status 数据库写坏 → ellekit 启动校验
+#      报 "Ellekit files are corrupted" 且全 App 闪退，只能重装越狱恢复。
+#      respring 由 Sileo 在 dpkg 完全退出后自己做。
+#   2. RootHide 上 fakesign 的 dylib 必须注册进 trustcache，否则 ellekit
+#      自愈机制会把"不受信"的 dylib 删掉并弹 corrupted 弹窗。
 set -e
-# Onyx postinst — refresh icon cache for the standalone app
-if [ -x /var/jb/usr/bin/uicache ]; then
-    /var/jb/usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
-elif [ -x /usr/bin/uicache ]; then
-    /usr/bin/uicache -p /var/jb/Applications/OnyxApp.app || true
+
+# ---- jbroot 探测（RootHide 物理路径，jbctl 只认物理路径）----
+JR=""
+if [ -x /usr/bin/jbroot ]; then
+    JR="$(/usr/bin/jbroot 2>/dev/null || true)"
+    JR="${JR%/}"
 fi
-# Notify SpringBoard to reload settings
-killall -9 cfprefsd 2>/dev/null || true
+if [ -z "$JR" ]; then
+    JR="/var/jb"
+fi
+
+# ---- ellekit 符号链接自愈 ----
+TI_DIR="$JR/usr/lib/TweakInject"
+DL_DIR="$JR/Library/MobileSubstrate/DynamicLibraries"
+if [ -d "$TI_DIR" ] && [ ! -e "$DL_DIR" ] && [ ! -L "$DL_DIR" ]; then
+    ln -s "$TI_DIR" "$DL_DIR" 2>/dev/null || true
+fi
+
+# ---- RootHide trustcache 注册（缺失会导致 ellekit 自愈删除 → corrupted 弹窗）----
+if [ -x /usr/bin/jbctl ]; then
+    if [ -f "$TI_DIR/Onyx.dylib" ]; then
+        /usr/bin/jbctl trustcache add "$TI_DIR/Onyx.dylib" >/dev/null 2>&1 || true
+    fi
+    if [ -f "$JR/Applications/OnyxApp.app/OnyxApp" ]; then
+        /usr/bin/jbctl trustcache add "$JR/Applications/OnyxApp.app/OnyxApp" >/dev/null 2>&1 || true
+    fi
+fi
+
+# ---- 图标 ----
+if [ -x "$JR/usr/bin/uicache" ]; then
+    "$JR/usr/bin/uicache" -p "$JR/Applications/OnyxApp.app" >/dev/null 2>&1 || true
+elif [ -x /usr/bin/uicache ]; then
+    /usr/bin/uicache -p "$JR/Applications/OnyxApp.app" >/dev/null 2>&1 || true
+fi
+
 exit 0

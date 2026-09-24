@@ -1,0 +1,29 @@
+#!/bin/sh
+# Onyx postrm — 卸载收尾：自愈 ellekit 的 DynamicLibraries 符号链接
+#
+# relaxin/RootHide 设备实证机制：
+#   ellekit deb 把 <jb>/Library/MobileSubstrate/DynamicLibraries 布成指向
+#   usr/lib/TweakInject 的符号链接，且 RootHide 版 ellekit injector 每次启动
+#   都强制校验该链接必须是 symlink，否则弹
+#   "Ellekit files are corrupted ... reinstalling the ellekit package"。
+#   dpkg 卸载本包时回收空目录，可能把 ellekit 的符号链接一并删掉
+#   （RootHide 上 ellekit 记录路径与本包目录条目路径前缀不一致，跨包保护失效）。
+#   此处在 dpkg 删完文件后把链接补回来 —— 链接属于 ellekit，补它是正确行为。
+# 注意：本脚本绝不删除任何 ellekit 文件，也绝不 respring / killall。
+
+JR=""
+if [ -x /usr/bin/jbroot ]; then
+    JR="$(/usr/bin/jbroot 2>/dev/null || true)"
+    JR="${JR%/}"
+fi
+if [ -z "$JR" ]; then
+    JR="/var/jb"
+fi
+
+TI_DIR="$JR/usr/lib/TweakInject"
+DL_DIR="$JR/Library/MobileSubstrate/DynamicLibraries"
+if [ -d "$TI_DIR" ] && [ ! -e "$DL_DIR" ] && [ ! -L "$DL_DIR" ]; then
+    ln -s "$TI_DIR" "$DL_DIR" 2>/dev/null || true
+fi
+
+exit 0

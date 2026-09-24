@@ -1,4 +1,27 @@
 #!/bin/sh
-set -e
-# Onyx preinst — rootless cleanup before install
+# Onyx preinst — 安装前自愈 ellekit 符号链接（relaxin/RootHide）
+#
+# 机制（RootHide 版 ellekit injector.c 设备实证）：
+#   injector 在每个 .app 进程启动时强制校验
+#   jbroot(/Library/MobileSubstrate/DynamicLibraries) 必须是符号链接
+#   （指向 usr/lib/TweakInject），否则 abort 弹
+#   "Ellekit files are corrupted ... reinstalling the ellekit package"。
+#   dpkg 在卸载本包时回收空目录，可能把 ellekit 的这个符号链接一并删掉。
+#   因此在安装/卸载路径上都做自愈，保证链接永远在。
+
+JR=""
+if [ -x /usr/bin/jbroot ]; then
+    JR="$(/usr/bin/jbroot 2>/dev/null || true)"
+    JR="${JR%/}"
+fi
+if [ -z "$JR" ]; then
+    JR="/var/jb"
+fi
+
+TI_DIR="$JR/usr/lib/TweakInject"
+DL_DIR="$JR/Library/MobileSubstrate/DynamicLibraries"
+if [ -d "$TI_DIR" ] && [ ! -e "$DL_DIR" ] && [ ! -L "$DL_DIR" ]; then
+    ln -s "$TI_DIR" "$DL_DIR" 2>/dev/null || true
+fi
+
 exit 0

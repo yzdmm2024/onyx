@@ -1,8 +1,8 @@
 Package: com.yzdmm.onyx
 Name: GO~
-Version: 1.0.1
+Version: 1.0.2
 Section: Tweaks
-Depends: firmware (>= 15.0), mobilesubstrate | ellekit, preferenceloader
+Depends: firmware (>= 15.0), mobilesubstrate, preferenceloader
 Maintainer: yzdmm
 Author: yzdmm
-Description: 想去哪里就去哪里。v1.0.1 修复 SpringBoard 崩溃：CLSimulationManager API 完全对齐 LocSim（alloc/init + appendSimulatedLocation + startLocationSimulation），修复配置 key 大小写。v1.0.0 全新架构：只注入 SpringBoard，系统级全局模拟，钉钉检测不到。支持 iOS 15-17：arm64 + arm64e。rootless 适配，A12+。
+Description: 想去哪里就去哪里。v1.0.2 修复 relaxin/RootHide 卸载本插件导致 "Ellekit files are corrupted" 弹窗：deb 不再携带 DynamicLibraries 目录条目(防 dpkg 回收 ellekit 符号链接)，安装/卸载脚本自愈 ellekit 符号链接+trustcache 注册，脚本内绝不 killall 系统进程；修复配置读取丢失 /var/tmp 路径导致 relaxin 上定位无效果。v1.0.1 修复 SpringBoard 崩溃与配置 key 大小写。只注入 SpringBoard，系统级全局模拟，支持 iOS 15-17，rootless 适配，A12+。

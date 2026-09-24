@@ -19,11 +19,14 @@ static BOOL s_enabled = NO;
 static BOOL s_simulating = NO;
 static CLSimulationManager *s_simMgr = nil;
 
-// 读配置：Tweak 同目录优先（dylib 能加载就能读），再回退 Preferences
+// 读配置：Tweak 同目录优先（dylib 能加载就能读），再回退公共路径与 Preferences
+// ⚠️ relaxin/RootHide 上 OnyxApp 唯一写得动的是 /var/tmp —— v1.0.0 曾把该路径
+//     从读取列表删掉导致定位完全无效果，v1.0.2 找回（与 README 优先级表对齐）。
 static NSDictionary *_loadPrefs(void) {
     NSArray *paths = @[
         @"/var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
         @"/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist",
+        @"/var/tmp/com.yzdmm.onyx.plist",
         @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
         @"/var/mobile/Library/Preferences/com.yzdmm.onyx.plist",
     ];

@@ -71,6 +71,11 @@ jobs:
               chmod 0755 "$W/root/DEBIAN/prerm"
               echo "injected prerm into $DEB"
             fi
+            if [ -f postrm ]; then
+              cp postrm "$W/root/DEBIAN/postrm"
+              chmod 0755 "$W/root/DEBIAN/postrm"
+              echo "injected postrm into $DEB"
+            fi
             rm -f "$DEB"
             dpkg-deb -b "$W/root" "$DEB"
             rm -rf "$W"
@@ -107,6 +112,36 @@ jobs:
             ldid -e "$APP" 2>/dev/null | grep -q 'platform-application' \
               && echo "OK ents: $DEB" \
               || { echo "FAIL: 未签入 platform-application -> $DEB"; exit 1; }
+          done
+
+      - name: Strip DIR entries (protect ellekit DynamicLibraries symlink)
+        run: |
+          set -e
+          # 必须是最后一个重打包步骤之后执行：
+          # 剥离 data.tar 里 var/jb/Library 子树的目录条目，防止 dpkg 卸载时
+          # 回收空目录连带删掉 ellekit 的 DynamicLibraries 符号链接
+          # （relaxin/RootHide 实证 → "Ellekit files are corrupted" 弹窗）。
+          # 注意 chmod 放在脚本内处理；此处 dpkg-deb -b 不会再跑。
+          python3 ci_strip_dirs.py packages/*.deb
+          echo "--- final verification: no DIR entries under var/jb/Library ---"
+          for DEB in packages/*.deb; do
+            python3 - "$DEB" <<'PYEOF'
+import sys, tarfile, lzma, io
+data = open(sys.argv[1], "rb").read()
+off = 8
+while off < len(data):
+    hdr = data[off:off+60]
+    name = hdr[0:16].decode().strip()
+    size = int(hdr[48:58].decode().strip())
+    body = data[off+60:off+60+size]
+    if name == "data.tar.xz":
+        tf = tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)))
+        bad = [m.name for m in tf.getmembers() if m.isdir() and (m.name == "./var/jb/Library" or m.name.startswith("./var/jb/Library/"))]
+        assert not bad, f"DIR entries still present: {bad}"
+        files = [m.name for m in tf.getmembers() if m.isreg()]
+        print(f"{sys.argv[1]}: {len(files)} files, no Library DIR entries")
+    off += 60 + size + (size % 2)
+PYEOF
           done
 
       - name: Upload deb artifacts

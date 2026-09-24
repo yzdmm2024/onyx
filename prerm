@@ -1,14 +1,21 @@
 #!/bin/sh
-set -e
-# Onyx prerm — 卸载前清理：停止模拟 + 清配置
-# 发 Darwin 通知让 SpringBoard 停止模拟
-notify_post com.yzdmm.onyx/stop 2>/dev/null || true
-# 杀掉 cfprefsd 刷新缓存
-killall -9 cfprefsd 2>/dev/null || true
-# 清理配置文件
-rm -f /var/tmp/com.yzdmm.onyx.plist 2>/dev/null || true
-rm -f /var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
-rm -f /Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
-# 清理瓦片缓存
-rm -rf /var/mobile/Library/OnyxTileCache 2>/dev/null || true
+# Onyx prerm — 卸载前清理
+#
+# ⚠️ 铁律（relaxin/RootHide 设备实证）：
+#   1. 绝不 killall 任何系统进程（cfprefsd 也不行）—— dpkg 事务中杀进程
+#      可能连带打断 Sileo/apt 收尾 → dpkg status 写坏 → ellekit 报 corrupted。
+#   2. 绝不碰 /Library/MobileSubstrate 或 DynamicLibraries 目录本身 ——
+#      那是 ellekit 的符号链接，动它 = "Ellekit files are corrupted" 弹窗。
+#      只删属于本包的文件。
+#   3. rm 必须限定在 remove/purge 场景 —— dpkg 升级流程会先跑旧包 prerm，
+#      无条件 rm 可能把刚解包的新文件删掉。
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    rm -f /var/tmp/com.yzdmm.onyx.plist 2>/dev/null || true
+    rm -f /var/jb/Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
+    rm -f /Library/MobileSubstrate/DynamicLibraries/com.yzdmm.onyx.prefs.plist 2>/dev/null || true
+    rm -f /var/jb/var/mobile/Library/Preferences/com.yzdmm.onyx.plist 2>/dev/null || true
+    rm -f /var/mobile/Library/Preferences/com.yzdmm.onyx.plist 2>/dev/null || true
+    rm -rf /var/mobile/Library/OnyxTileCache 2>/dev/null || true
+    rm -rf /var/jb/var/mobile/Library/OnyxTileCache 2>/dev/null || true
+fi
 exit 0
